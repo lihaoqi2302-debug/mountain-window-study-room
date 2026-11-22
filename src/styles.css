@@ -186,6 +186,21 @@ kbd {
 .chapter-notes button { min-height: 42px; padding: 5px 10px; color: #382f22; border: 1px solid #ae9875; border-radius: 3px; background: #e9dbc2; }
 .chapter-notes li button { margin-top: 7px; }
 .chapter-notes button:disabled { opacity: .5; cursor: default; }
+.room-chat { border-top: 1px solid var(--line); margin-top: 13px; padding-top: 12px; }
+.room-chat h3 { display: flex; align-items: center; gap: 7px; color: var(--brass); font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+.chat-log { max-height: 12.5rem; min-height: 3.5rem; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
+.chat-log article { padding: 7px 8px; margin-bottom: 5px; border: 1px solid var(--line); border-radius: 3px; background: #191c17; }
+.chat-log article header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 11px; }
+.chat-log article b { color: var(--brass); overflow-wrap: anywhere; }
+.chat-log article p { margin: 4px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 13px; }
+.chat-empty { color: var(--muted); font-size: 12px; margin: 0 0 9px; }
+.room-chat form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 5px; margin-top: 7px; }
+.room-chat textarea { width: 100%; min-height: 42px; padding: 6px; resize: vertical; background: #191c17; border: 1px solid var(--line); border-radius: 3px; font-size: 13px; }
+.room-chat .button { white-space: nowrap; gap: 4px; }
+.room-chat .button:disabled { opacity: .5; cursor: default; }
+.offline-controls { margin-top: 12px; }
+.offline-controls .button:disabled { opacity: .58; cursor: default; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 @media (max-width: 900px) {
   .shell { padding-inline: 20px; }
