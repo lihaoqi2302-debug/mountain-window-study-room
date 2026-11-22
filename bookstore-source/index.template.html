@@ -2962,6 +2962,25 @@ body[data-seated="true"] #exploreHint{visibility:hidden;}
     #roomMenu, .quick-views { display: none; }
     #roomQuality { max-width: 11rem; color: #efe1c7; background: #28221d; font: 11px var(--sans); padding: 5px 7px; }
     .toc-item[aria-disabled="true"], .chapter-jump:disabled { opacity: .65; }
+    #pdfReadingTools {
+      mask-image: none;
+      -webkit-mask-image: none;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    #pdfPageInput {
+      width: 5em;
+      min-height: 34px;
+      padding: 2px 6px;
+      color: var(--ivory-strong);
+      background: #211e19;
+      border: 1px solid var(--gold-soft);
+      border-radius: 3px;
+      font: 12px var(--sans);
+    }
+    @media (pointer:coarse) {
+      #pdfReadingTools button, #pdfPageInput { min-height: 44px; }
+    }
     .toc-item[aria-disabled="true"] .toc-label::after { content: ' · 目录'; color: #b7a58c; font-size: .9em; }
     @media (max-width: 880px), (pointer: coarse) {
       .quick-views {
@@ -3238,6 +3257,11 @@ body[data-seated="true"] #exploreHint{visibility:hidden;}
         <button class="chapter-jump" type="button" data-goto="vol3">第三卷 · 现实建造</button>
         <button class="chapter-jump" type="button" data-goto="appendix">附录</button>
       </div>
+      <form class="read-bar__chapters" id="pdfReadingTools" aria-label="本地书稿控制" hidden>
+        <input id="pdfPageInput" aria-label="PDF 页码" type="number" inputmode="numeric" min="1" step="1" required>
+        <button class="chapter-jump" type="submit">跳转</button>
+        <button class="chapter-jump" id="btnBuiltinBook" type="button">回到《地球 Online》</button>
+      </form>
 
       <div class="read-bar__progress">
         <span id="pageNow" class="page-number"><span>01</span></span>
