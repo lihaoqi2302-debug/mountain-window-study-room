@@ -273,7 +273,8 @@ function getWorkerBlobUrl(workerUrl) {
  */
 async function attachWorker(engine) {
   const workerUrl = engine.workerUrl;
-  const options = ensureWorkerOptions(engine.lib);
+  const options = engine.lib.GlobalWorkerOptions;
+  if (!options) return { mode: 'none' };
 
   // 【实测结论 · file:// 场景】blob module worker 会永久挂起：模块 worker 无法在
   // file:// 页面里启动，pdf.js 的 getDocument 会一直等待永不回来的消息。
@@ -289,18 +290,6 @@ async function attachWorker(engine) {
 
   // ---- 方案 3：没有 worker（主线程渲染）-----------------------------------
   return { mode: 'none' };
-}
-
-/**
- * 拿到（必要时创建）GlobalWorkerOptions 容器。
- * @param {any} lib
- * @returns {any}
- */
-function ensureWorkerOptions(lib) {
-  if (!lib.GlobalWorkerOptions || typeof lib.GlobalWorkerOptions !== 'object') {
-    lib.GlobalWorkerOptions = {};
-  }
-  return lib.GlobalWorkerOptions;
 }
 
 /* -------------------------------------------------------------------------- */
