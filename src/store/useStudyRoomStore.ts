@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { defaultEnvironment, mergeNotes, rememberRoom } from '../studyContent'
-import type { Note, RoomEnvironment } from '../studyContent'
+import { chatLimit, defaultEnvironment, mergeRecent, noteLimit, rememberRoom } from '../studyContent'
+import type { Note, RoomEnvironment, RoomMessage } from '../studyContent'
 
 export type Seat = 'sofa' | 'armchair' | 'desk'
 export type Pose = { x: number; y?: number; z: number; yaw: number; seat?: Seat }
@@ -38,8 +38,10 @@ interface StudyRoomState {
   applyEnvironment: (environment: RoomEnvironment) => void
   localNotes: Note[]
   roomNotes: Record<string, Note[]>
+  chats: Record<string, RoomMessage[]>
   saveLocalNote: (note: Note) => void
   mergeRoomNotes: (id: string, notes: Note[]) => void
+  mergeChat: (id: string, messages: RoomMessage[]) => void
   peers: Record<string, Peer>
   resetRoom: (id: string | null, status: RoomStatus, message?: string) => void
   setRoomStatus: (status: RoomStatus, message?: string) => void
@@ -49,7 +51,7 @@ interface StudyRoomState {
 }
 
 type Preferences = Pick<StudyRoomState, 'name' | 'color' | 'bookmarks' | 'volume'
-  | 'localNotes' | 'roomNotes' | 'savedEnvironments'>
+  | 'localNotes' | 'roomNotes' | 'savedEnvironments' | 'chats'>
 
 export const useStudyRoomStore = create<StudyRoomState>()(
   persist<StudyRoomState, [], [], Preferences>(
@@ -80,6 +82,7 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       savedEnvironments: {},
       localNotes: [],
       roomNotes: {},
+      chats: {},
       setAuthority: (isHost, hostOnline) => set((state) =>
         state.isHost === isHost && state.hostOnline === hostOnline ? state : { isHost, hostOnline }),
       applyEnvironment: (environment) => set((state) => {
@@ -92,8 +95,13 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       saveLocalNote: (note) => set((state) => ({ localNotes: [...state.localNotes, note] })),
       mergeRoomNotes: (room, notes) => set((state) => {
         const previous = state.roomNotes[room] ?? []
-        const merged = mergeNotes(previous, notes)
+        const merged = mergeRecent(previous, notes, noteLimit)
         return merged === previous ? state : { roomNotes: rememberRoom(state.roomNotes, room, merged) }
+      }),
+      mergeChat: (room, messages) => set((state) => {
+        const previous = state.chats[room] ?? []
+        const merged = mergeRecent(previous, messages, chatLimit)
+        return merged === previous ? state : { chats: rememberRoom(state.chats, room, merged) }
       }),
       peers: {},
       resetRoom: (roomId, roomStatus, roomMessage = '') => set((state) => ({
@@ -120,8 +128,8 @@ export const useStudyRoomStore = create<StudyRoomState>()(
     }),
     {
       name: 'mountain-window-study-room-v1',
-      partialize: ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments }) =>
-        ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments }),
+      partialize: ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats }) =>
+        ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats }),
       // Pass only durable changes to storage. Pose updates run at render speed.
       storage: {
         getItem: (name) => {
@@ -138,7 +146,8 @@ export const useStudyRoomStore = create<StudyRoomState>()(
             const { state } = value
             if (last && state.name === last.name && state.color === last.color && state.volume === last.volume
               && state.bookmarks === last.bookmarks && state.localNotes === last.localNotes
-              && state.roomNotes === last.roomNotes && state.savedEnvironments === last.savedEnvironments) return
+              && state.roomNotes === last.roomNotes && state.savedEnvironments === last.savedEnvironments
+              && state.chats === last.chats) return
             try {
               localStorage.setItem(name, JSON.stringify(value))
               last = state
