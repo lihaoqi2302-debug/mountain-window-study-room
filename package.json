@@ -1,0 +1,40 @@
+{
+  "name": "mountain-window-study-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "predev": "node scripts/prepare-draco.mjs",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "node scripts/prepare-draco.mjs",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "build:formal": "node ../cozy-bookstore/build.mjs --companion && npm run typecheck && vite build --mode formal",
+    "preview:formal": "vite preview --mode formal --port 5196 --strictPort"
+  },
+  "dependencies": {
+    "@react-three/drei": "9.122.0",
+    "@react-three/fiber": "8.18.0",
+    "lucide-react": "^0.577.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "0.172.0",
+    "trystero": "0.27.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "0.172.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "tailwindcss": "4.3.5",
+    "terser": "^5.44.0",
+    "typescript": "~5.9.3",
+    "vite": "7.3.8"
+  }
+}

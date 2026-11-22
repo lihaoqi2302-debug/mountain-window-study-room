@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-formal/
+dist-model/
+.formal/
+public/draco/
+*.log
