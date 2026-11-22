@@ -1,0 +1,15 @@
+{
+  "public": {
+    "edition": "public",
+    "scene": "refined",
+    "manuscript": "trial",
+    "trialPages": 6,
+    "audio": "ambience"
+  },
+  "full": {
+    "edition": "full",
+    "scene": "refined",
+    "manuscript": "complete",
+    "audio": "local-record"
+  }
+}

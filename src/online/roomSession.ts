@@ -3,12 +3,14 @@ import type { Pose, Profile, RoomStatus } from '../store/useStudyRoomStore'
 import books from '../data/books.json'
 import { randomId } from '../studyContent'
 import { attachCollaboration } from './roomCollaboration'
+import { getIceConfiguration, monitorIce, selectedRoute } from './ice'
+import { validFocus } from '../focus'
+import { networkRoomId, refinedScene } from '../edition'
 
-const formal = import.meta.env.MODE === 'formal'
-const appId = formal ? 'mountain-window-study-room/formal-2' : 'mountain-window-study-room/phase-1'
 const roomPattern = /^([0-9a-f]{32})(?:~([a-zA-Z0-9_-]{22}))?$/i
 const store = useStudyRoomStore
-const signalingTimeout = 12_000
+const signalingTimeout = 14_000
+const negotiationTimeout = 14_000
 const sampleInterval = 100
 const idleInterval = 2_000
 
@@ -31,7 +33,8 @@ function setInvite(id: string | null) {
 function closeSession() {
   generation++
   if (active) {
-    lastLeave = active()
+    const leaving = active()
+    lastLeave = Promise.all([lastLeave, leaving]).then(() => undefined)
     active = null
   }
   return lastLeave
@@ -40,8 +43,8 @@ function closeSession() {
 export function validPose(value: unknown): value is Pose {
   if (!value || typeof value !== 'object') return false
   const { x, y, z, yaw, seat } = value as Pose
-  return Number.isFinite(x) && Math.abs(x) <= (formal ? 4.2 : 32)
-    && Number.isFinite(z) && Math.abs(z) <= (formal ? 3.6 : 32)
+  return Number.isFinite(x) && Math.abs(x) <= (refinedScene ? 4.2 : 32)
+    && Number.isFinite(z) && Math.abs(z) <= (refinedScene ? 3.6 : 32)
     && (y === undefined || Number.isFinite(y) && y >= -.1 && y <= 4)
     && Number.isFinite(yaw) && Math.abs(yaw) <= Math.PI * 2
     && (seat === undefined || seat === 'sofa' || seat === 'armchair' || seat === 'desk')
@@ -49,15 +52,17 @@ export function validPose(value: unknown): value is Pose {
 
 function validProfile(value: unknown): value is Profile {
   if (!value || typeof value !== 'object') return false
-  const { name, color, activity, book } = value as Profile
+  const { name, color, activity, book, focus } = value as Profile
   return typeof name === 'string' && name.length > 0 && name.length <= 16
     && avatarColors.includes(color) && activities.includes(activity)
     && (book === null || books.some(({ id }) => id === book))
+    && (focus === undefined || validFocus(focus))
 }
 
 function readProfile(): Profile {
-  const { name, color, activity, openBook, sceneBook } = store.getState()
-  return { name, color, activity, book: openBook ?? sceneBook }
+  const { name, color, activity, openBook, sceneBook, focus } = store.getState()
+  const presence = focus.endAt && focus.endAt > Date.now() ? { phase: focus.phase, endAt: focus.endAt } : undefined
+  return { name, color, activity, book: openBook ?? sceneBook, ...(presence ? { focus: presence } : {}) }
 }
 
 export function leaveRoom() {
@@ -90,6 +95,8 @@ export async function joinStudyRoom(rawId: string, create = false) {
   const isCurrent = () => generation === current
   let interval: number | undefined
   const listeners: Array<() => void> = []
+  const controller = new AbortController()
+  active = async () => controller.abort()
   const updateStatus = (status: RoomStatus, message?: string) => {
     if (isCurrent()) store.getState().setRoomStatus(status, message)
   }
@@ -106,22 +113,29 @@ export async function joinStudyRoom(rawId: string, create = false) {
 
   try {
     // Load the network stack only after an explicit invitation or room creation.
-    const { joinRoom, getRelaySockets, roles } = await import('trystero')
+    const [{ joinRoom, getRelaySockets, roles }, ice] = await Promise.all([
+      import('trystero'),
+      navigator.onLine ? getIceConfiguration(controller.signal) : undefined,
+    ])
     await previousLeave
     if (!isCurrent()) return
-    if (!navigator.onLine) {
+    if (!navigator.onLine || !ice) {
       fail('当前设备离线。恢复网络后可以重试。')
       return
     }
 
+    const monitor = monitorIce(controller.signal)
     const room = joinRoom({
-      appId,
+      appId: networkRoomId,
       maxUsers: 6,
       maxReceiveBytes: 96 * 1024,
       use: [roles({ selfAsAdmin: create })],
       relayConfig: { warnOnRelayFailure: false },
+      rtcConfig: ice.config,
+      rtcPolyfill: monitor.Connection,
     }, id)
     active = async () => {
+      controller.abort()
       window.clearInterval(interval)
       for (const remove of listeners) remove()
       try { await room.leave() } catch (error) { console.warn('Room cleanup failed', error) }
@@ -134,6 +148,11 @@ export async function joinStudyRoom(rawId: string, create = false) {
     listeners.push(attachCollaboration(room, shareCode, identityInfo.isAdmin, shareCode.split('~')[1]))
     const motion = room.makeAction<Pose>('motion')
     const identity = room.makeAction<Profile>('profile')
+    let noSignalSince = performance.now()
+    let negotiatingSince = 0
+    let nextStats = 0
+    let route: Awaited<ReturnType<typeof selectedRoute>> | 'mixed' = 'unknown'
+    const restricted = () => fail('已找到好友，但点对点连接受限。可以先单机阅读，或切换网络后重试。')
 
     // A peer can leave between checking presence and sending. The next join resends a snapshot.
     const sendMotion = (pose: Pose, target?: string) => void motion.send(pose, { target }).catch(() => {})
@@ -160,11 +179,12 @@ export async function joinStudyRoom(rawId: string, create = false) {
           fail('房间已满，请稍后重试或创建新房间。')
         }
         if (error.code === 'identity-failed') fail('浏览器无法建立联机身份，请重试。')
+        if (['peer-connect-failed', 'handshake-failed'].includes(error.code) && !Object.keys(room.getPeers()).length) restricted()
       }),
       store.subscribe((next, previous) => {
         if (next.name !== previous.name || next.color !== previous.color
           || next.activity !== previous.activity || next.openBook !== previous.openBook
-          || next.sceneBook !== previous.sceneBook) {
+          || next.sceneBook !== previous.sceneBook || next.focus.endAt !== previous.focus.endAt) {
           sendProfile(readProfile())
         }
       }),
@@ -173,16 +193,30 @@ export async function joinStudyRoom(rawId: string, create = false) {
     const handleOffline = () => fail('网络已断开，可以继续单机。恢复网络后点击重试。')
     window.addEventListener('offline', handleOffline)
     listeners.push(() => window.removeEventListener('offline', handleOffline))
-    let noSignalSince = performance.now()
     let lastPose: Pose | undefined
     let lastSent = 0
     interval = window.setInterval(() => {
       if (!isCurrent()) return
       const now = performance.now()
       const state = store.getState()
-      if (Object.keys(room.getPeers()).length) {
+      const peers = Object.values(room.getPeers())
+      const relays = Object.values(getRelaySockets()).filter((socket) => socket.readyState === WebSocket.OPEN).length
+      store.getState().setDiagnostics({
+        relays, route, candidates: [...monitor.candidates].sort().join(', '), turnAvailable: ice.turnAvailable,
+      })
+      if (peers.length) {
+        negotiatingSince = 0
         noSignalSince = now
         updateStatus('connected')
+        if (now >= nextStats) {
+          nextStats = now + 2000
+          void Promise.all(peers.map(({ connection }) => connection
+            ? selectedRoute(connection).catch(() => 'unknown' as const)
+            : Promise.resolve('unknown' as const))).then((values) => {
+            const known = values.filter((value) => value !== 'unknown')
+            route = known.includes('direct') && known.includes('relay') ? 'mixed' : known[0] ?? 'unknown'
+          })
+        }
         if (lastPose !== state.pose || now - lastSent >= idleInterval) {
           lastPose = state.pose
           lastSent = now
@@ -191,11 +225,16 @@ export async function joinStudyRoom(rawId: string, create = false) {
         return
       }
 
-      if (Object.values(getRelaySockets()).some((socket) => socket.readyState === WebSocket.OPEN)) {
+      route = 'unknown'
+      if (monitor.pending.size || negotiatingSince) {
+        negotiatingSince ||= now
+        if (now - negotiatingSince >= negotiationTimeout) restricted()
+        else updateStatus('negotiating', ice.turnAvailable ? '正在尝试直连或 TURN 中继。' : '正在尝试直连，书屋仍可使用。')
+      } else if (relays) {
         noSignalSince = now
         updateStatus('waiting')
       } else if (now - noSignalSince >= signalingTimeout) {
-        fail('暂时连不上公共信令。请检查网络后重试，或继续单机。')
+        fail('公共信令连接超时。可以先单机阅读，或切换网络后重试。')
       } else {
         updateStatus('connecting')
       }

@@ -1,7 +1,12 @@
 node_modules/
 dist/
 dist-formal/
+dist-public/
 dist-model/
 .formal/
+.public-room/
+.bookstore-build-*/
+.env*
+!.env.example
 public/draco/
 *.log

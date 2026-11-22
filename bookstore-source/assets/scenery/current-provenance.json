@@ -1,0 +1,36 @@
+[
+  {
+    "mode": "forest",
+    "asset": "misty_pines",
+    "source": "https://polyhaven.com/a/misty_pines",
+    "authors": {
+      "Greg Zaal": "All"
+    },
+    "license": "CC0",
+    "original_md5_verified": "d2073546d2a8d0c7bf5e82d071fa2b29",
+    "embedded_sha256": "0a52a907a5b1fc4fb22d58b25cd214679a039f800eb0733bd12e6002ee248776"
+  },
+  {
+    "mode": "snow",
+    "asset": "snowy_forest",
+    "source": "https://polyhaven.com/a/snowy_forest",
+    "authors": {
+      "Adrian Kubasa": "All"
+    },
+    "license": "CC0",
+    "original_md5_verified": "e744ab5f3470a8dfb469c64dea6e49ad",
+    "embedded_sha256": "92b795852fe40bbb811569079cb0d062bcd4d4d5d23a34e0cfe6d2677fdc4e46"
+  },
+  {
+    "mode": "mountain",
+    "source": "https://polyhaven.com/a/lago_disola",
+    "rights": "CC0",
+    "embedded_sha256": "73a3fea13a981ddb7f4d1f16e24afc4f5ca87668ce8d8ec4410184f6fb8d5fbc"
+  },
+  {
+    "mode": "aurora",
+    "source": "https://ambientcg.com/view?id=NightSkyHDRI004",
+    "rights": "CC0",
+    "embedded_sha256": "47d0bba837e026120d63a7aec66c4b61bd2e842a212027a57d2e501337edbd6a"
+  }
+]

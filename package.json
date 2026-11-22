@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "predev": "node scripts/prepare-draco.mjs",
@@ -13,7 +13,9 @@
     "prebuild": "node scripts/prepare-draco.mjs",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "build:formal": "node ../cozy-bookstore/build.mjs --companion && npm run typecheck && vite build --mode formal",
+    "build:public": "node scripts/prepare-bookstore.mjs public && npm run typecheck && vite build --mode public && node scripts/check-public-release.mjs",
+    "preview:public": "vite preview --mode public --host 127.0.0.1 --port 5197 --strictPort",
+    "build:formal": "node scripts/prepare-bookstore.mjs && npm run typecheck && vite build --mode formal",
     "preview:formal": "vite preview --mode formal --port 5196 --strictPort"
   },
   "dependencies": {
@@ -33,6 +35,8 @@
     "@types/react-dom": "^18.3.0",
     "@types/three": "0.172.0",
     "@vitejs/plugin-react": "5.2.0",
+    "pdfjs-dist": "6.5.438",
+    "sharp": "0.35.5",
     "tailwindcss": "4.3.5",
     "terser": "^5.44.0",
     "typescript": "~5.9.3",

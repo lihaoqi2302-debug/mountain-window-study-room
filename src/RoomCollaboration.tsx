@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { makeAmbientPlayer } from './audio/ambience'
+import { useRoomAudio } from './RoomAudio'
 import { postRoomNote, setRoomEnvironment } from './online/roomCollaboration'
 import { chapterLabel, noteLength, randomId, soundLabels, weatherLabels } from './studyContent'
 import type { Note, RoomEnvironment } from './studyContent'
@@ -15,53 +15,14 @@ export function RoomEnvironmentControls() {
     environment: state.environment, roomId: state.roomId, isHost: state.isHost, hostOnline: state.hostOnline,
     volume: state.volume, status: state.roomStatus,
   })))
-  const player = useRef<Awaited<ReturnType<typeof makeAmbientPlayer>> | null>(null)
-  const [listening, setListening] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    return () => { player.current?.stop(); player.current = null; setListening(false) }
-  }, [roomId])
-  useEffect(() => {
-    if (status !== 'failed') return
-    player.current?.stop()
-    player.current = null
-    setListening(false)
-  }, [status])
-  useEffect(() => { player.current?.setSound(environment.sound) }, [environment.sound])
-  useEffect(() => { player.current?.setVolume(volume) }, [volume])
+  const { listening, pending, message, listen } = useRoomAudio()
+  const [feedback, setFeedback] = useState('')
 
   async function change(patch: Partial<RoomEnvironment>) {
     if (!await setRoomEnvironment({ ...store.getState().environment, ...patch })) {
-      setMessage('当前无法同步环境，请稍后再试。')
+      setFeedback('当前无法同步环境，请稍后再试。')
     } else {
-      setMessage('')
-    }
-  }
-
-  async function listen() {
-    if (player.current) {
-      player.current.stop()
-      player.current = null
-      setListening(false)
-      return
-    }
-    setPending(true)
-    try {
-      const audio = await makeAmbientPlayer(store.getState().volume)
-      if (store.getState().roomId !== roomId) {
-        audio.stop()
-        return
-      }
-      player.current = audio
-      audio.setSound(store.getState().environment.sound)
-      setListening(true)
-      setMessage('')
-    } catch {
-      setMessage('环境音暂时无法播放，请重试。')
-    } finally {
-      setPending(false)
+      setFeedback('')
     }
   }
 
@@ -95,7 +56,7 @@ export function RoomEnvironmentControls() {
         onClick={() => void listen()}>{listening ? '关闭共学环境音' : '允许播放共学环境音'}</button>
       {listening && <input aria-label="共学环境音量" type="range" min="0" max="1" step=".01" value={volume}
         onChange={(event) => store.getState().setVolume(Number(event.target.value))} />}
-      {message && <p role="status" className="field-message">{message}</p>}
+      {(feedback || message) && <p role="status" className="field-message">{feedback || message}</p>}
     </div>
   )
 }

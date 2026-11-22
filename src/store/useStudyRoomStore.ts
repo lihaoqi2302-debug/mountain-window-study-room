@@ -2,16 +2,26 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { chatLimit, defaultEnvironment, mergeRecent, noteLimit, rememberRoom } from '../studyContent'
 import type { Note, RoomEnvironment, RoomMessage } from '../studyContent'
+import { emptyDiagnostics } from '../online/ice'
+import type { ConnectionDiagnostics } from '../online/ice'
+import { initialFocus, localDay } from '../focus'
+import type { FocusPresence, FocusTimer } from '../focus'
 
 export type Seat = 'sofa' | 'armchair' | 'desk'
 export type Pose = { x: number; y?: number; z: number; yaw: number; seat?: Seat }
 export const avatarColors = ['#b57a55', '#809384', '#788fa9', '#a67e91', '#c3a36b']
 export const activities = ['随意逛逛', '专注刷题中', '摸鱼发呆']
-export type Profile = { name: string; color: string; activity: string; book: string | null }
+export type Profile = { name: string; color: string; activity: string; book: string | null; focus?: FocusPresence }
 export type Peer = { pose: Pose | null; profile: Profile | null }
-export type RoomStatus = 'solo' | 'connecting' | 'waiting' | 'connected' | 'failed'
+export type RoomStatus = 'solo' | 'connecting' | 'waiting' | 'negotiating' | 'connected' | 'failed'
 
 interface StudyRoomState {
+  focus: FocusTimer
+  configureFocus: (focus: number, rest: number) => void
+  toggleFocus: (now: number) => void
+  resetFocus: () => void
+  settleFocus: (now: number) => void
+  dismissFocusNotice: () => void
   pose: Pose
   setPose: (pose: Pose) => void
   name: string
@@ -30,6 +40,8 @@ interface StudyRoomState {
   roomId: string | null
   roomStatus: RoomStatus
   roomMessage: string
+  diagnostics: ConnectionDiagnostics
+  setDiagnostics: (value: ConnectionDiagnostics) => void
   isHost: boolean
   hostOnline: boolean
   environment: RoomEnvironment
@@ -51,11 +63,35 @@ interface StudyRoomState {
 }
 
 type Preferences = Pick<StudyRoomState, 'name' | 'color' | 'bookmarks' | 'volume'
-  | 'localNotes' | 'roomNotes' | 'savedEnvironments' | 'chats'>
+  | 'localNotes' | 'roomNotes' | 'savedEnvironments' | 'chats' | 'focus'>
 
 export const useStudyRoomStore = create<StudyRoomState>()(
   persist<StudyRoomState, [], [], Preferences>(
     (set) => ({
+      focus: initialFocus,
+      configureFocus: (focus, rest) => set((state) => {
+        if (state.focus.endAt !== null || state.focus.remaining !== null) return state
+        const minutes = (value: number, max: number) => Math.min(max, Math.max(1, Math.round(value)))
+        if (!Number.isFinite(focus) || !Number.isFinite(rest)) return state
+        return { focus: { ...state.focus, focus: minutes(focus, 120), rest: minutes(rest, 60) } }
+      }),
+      toggleFocus: (now) => set(({ focus }) => ({
+        focus: focus.endAt === null
+          ? { ...focus, endAt: now + (focus.remaining ?? focus[focus.phase] * 60_000), remaining: null, notice: '' }
+          : { ...focus, endAt: null, remaining: Math.max(1, focus.endAt - now) },
+      })),
+      resetFocus: () => set(({ focus }) => ({ focus: { ...focus, phase: 'focus', endAt: null, remaining: null, notice: '' } })),
+      settleFocus: (now) => set((state) => {
+        const { focus } = state
+        if (focus.endAt === null || focus.endAt > now) return state
+        const day = localDay(focus.endAt)
+        const today = focus.today.day === day ? focus.today : { day, rounds: 0, minutes: 0 }
+        return focus.phase === 'focus' ? { focus: {
+          ...focus, endAt: null, remaining: null, phase: 'rest', notice: '专注完成。休息一会儿吧。',
+          today: { day, rounds: today.rounds + 1, minutes: today.minutes + focus.focus },
+        } } : { focus: { ...focus, endAt: null, remaining: null, phase: 'focus', notice: '休息结束。准备好再继续。' } }
+      }),
+      dismissFocusNotice: () => set(({ focus }) => ({ focus: { ...focus, notice: '' } })),
       pose: { x: 0.28, z: 1.22, yaw: Math.PI / 4 },
       setPose: (pose) => set({ pose }),
       name: '读者',
@@ -76,6 +112,13 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       roomId: null,
       roomStatus: 'solo',
       roomMessage: '',
+      diagnostics: emptyDiagnostics,
+      setDiagnostics: (diagnostics) => set((state) => {
+        const current = state.diagnostics
+        return current.relays === diagnostics.relays && current.route === diagnostics.route
+          && current.candidates === diagnostics.candidates && current.turnAvailable === diagnostics.turnAvailable
+          ? state : { diagnostics }
+      }),
       isHost: false,
       hostOnline: false,
       environment: defaultEnvironment,
@@ -106,6 +149,7 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       peers: {},
       resetRoom: (roomId, roomStatus, roomMessage = '') => set((state) => ({
         roomId, roomStatus, roomMessage, peers: {},
+        diagnostics: roomStatus === 'failed' ? state.diagnostics : emptyDiagnostics,
         isHost: false, hostOnline: false,
         environment: roomId ? state.savedEnvironments[roomId] ?? defaultEnvironment : defaultEnvironment,
       })),
@@ -128,8 +172,8 @@ export const useStudyRoomStore = create<StudyRoomState>()(
     }),
     {
       name: 'mountain-window-study-room-v1',
-      partialize: ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats }) =>
-        ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats }),
+      partialize: ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats, focus }) =>
+        ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments, chats, focus }),
       // Pass only durable changes to storage. Pose updates run at render speed.
       storage: {
         getItem: (name) => {
@@ -147,7 +191,7 @@ export const useStudyRoomStore = create<StudyRoomState>()(
             if (last && state.name === last.name && state.color === last.color && state.volume === last.volume
               && state.bookmarks === last.bookmarks && state.localNotes === last.localNotes
               && state.roomNotes === last.roomNotes && state.savedEnvironments === last.savedEnvironments
-              && state.chats === last.chats) return
+              && state.chats === last.chats && state.focus === last.focus) return
             try {
               localStorage.setItem(name, JSON.stringify(value))
               last = state

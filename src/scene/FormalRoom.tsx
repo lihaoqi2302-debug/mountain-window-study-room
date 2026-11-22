@@ -9,8 +9,8 @@ import { useStudyRoomStore } from '../store/useStudyRoomStore'
 const protocol = 'mountain-window/scene-2'
 const store = useStudyRoomStore
 
-export default function FormalRoom({ controls, identity, reader }: {
-  controls: ReactNode; identity: ReactNode; reader: ReactNode
+export default function FormalRoom({ controls, identity, reader, onSceneCovered }: {
+  controls: ReactNode; identity: ReactNode; reader: ReactNode; onSceneCovered: (covered: boolean) => void
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -37,6 +37,7 @@ export default function FormalRoom({ controls, identity, reader }: {
         || event.data?.protocol !== protocol) return
       const { type, pose, id } = event.data
       if (type === 'ready') { sendPeers(); sendEnvironment() }
+      if (type === 'scene-panel' && typeof event.data.covered === 'boolean') onSceneCovered(event.data.covered)
       if (type === 'panel' && !dialog.current?.open) dialog.current?.showModal()
       if (type === 'pose' && validPose(pose)) store.getState().setPose(pose)
       if (type === 'reading' && (id === 'earth-online' || id === null)) store.getState().setSceneBook(id)
@@ -57,7 +58,7 @@ export default function FormalRoom({ controls, identity, reader }: {
       window.removeEventListener('message', receive)
       unsubscribe()
     }
-  }, [])
+  }, [onSceneCovered])
 
   const openBook = (id: string) => {
     dialog.current?.close()

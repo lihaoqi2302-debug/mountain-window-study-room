@@ -1,0 +1,21 @@
+[
+  {
+    "key": "starry-night",
+    "title": "The Starry Night",
+    "artist": "Vincent van Gogh",
+    "source": "https://commons.wikimedia.org/wiki/File:Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/3840px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+    "rights": "Public domain reproduction; Google Art Project",
+    "sha256": "38bf9a432e8282728e3b6a3c01e5c2c9920df6ed2bd7a5398bcf89919fc5b419"
+  },
+  {
+    "key": "water-lilies",
+    "title": "Water Lilies",
+    "artist": "Claude Monet",
+    "source": "https://www.artic.edu/artworks/16568/water-lilies",
+    "metadata": "https://api.artic.edu/api/v1/artworks/16568",
+    "rights": "Public domain; Art Institute of Chicago Open Access",
+    "is_public_domain": true,
+    "sha256": "74daef5f2e8a2a66243ed7ab2f74221c41a58c2beecd499e66955cb114e26789"
+  }
+]

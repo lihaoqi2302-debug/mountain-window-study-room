@@ -11,17 +11,22 @@ import FormalRoom from './scene/FormalRoom'
 import { ChapterNotes, RoomEnvironmentControls } from './RoomCollaboration'
 import RoomChat from './RoomChat'
 import OfflineControls from './offline/OfflineControls'
+import { FocusClock, FocusMembers } from './FocusClock'
+import { RoomAudioHint, RoomAudioProvider } from './RoomAudio'
+import { refinedScene } from './edition'
 import { activities, avatarColors, useStudyRoomStore } from './store/useStudyRoomStore'
 
 const StudyScene = lazy(() => import('./scene/StudyScene'))
 const store = useStudyRoomStore
 const statusLabels = {
-  solo: '单机',
-  connecting: '正在连接',
-  waiting: '等待好友',
-  connected: '已连接',
-  failed: '连接失败',
+  solo: '本地独处',
+  connecting: '正在连接信令',
+  waiting: '正在寻找房间好友',
+  negotiating: '正在建立点对点连接',
+  connected: '已连入',
+  failed: '连接超时或受限',
 }
+const routes = { unknown: '检测中', direct: '直连', relay: '中继', mixed: '直连及中继' }
 
 function useMovementControls() {
   useEffect(() => {
@@ -80,11 +85,12 @@ function TouchControls() {
 }
 
 function RoomControls() {
-  const { roomId, roomStatus, roomMessage, count } = store(useShallow((state) => ({
+  const { roomId, roomStatus, roomMessage, count, diagnostics } = store(useShallow((state) => ({
     roomId: state.roomId,
     roomStatus: state.roomStatus,
     roomMessage: state.roomMessage,
     count: Object.keys(state.peers).length,
+    diagnostics: state.diagnostics,
   })))
   const [copyMessage, setCopyMessage] = useState('')
   const [showLink, setShowLink] = useState(false)
@@ -144,6 +150,16 @@ function RoomControls() {
             : roomStatus === 'connecting' ? '正在尝试连接，书屋仍可使用。'
               : '一个人待一会儿，或请好友进来。')}
       </p>
+      {roomStatus === 'connected' && <p className="field-message">连接方式 · {routes[diagnostics.route]}</p>}
+      {roomStatus !== 'solo' && <details className="network-diagnostics">
+        <summary>网络诊断</summary>
+        <dl>
+          <div><dt>可用信令</dt><dd>{diagnostics.relays} 个公共节点</dd></div>
+          <div><dt>ICE 候选</dt><dd>{diagnostics.candidates || '尚未收集'}</dd></div>
+          <div><dt>TURN</dt><dd>{diagnostics.turnAvailable ? '已获取临时配置' : '未配置，使用 STUN'}</dd></div>
+          <div><dt>选中链路</dt><dd>{roomStatus === 'connected' ? routes[diagnostics.route] : '尚未连通'}</dd></div>
+        </dl>
+      </details>}
       {roomId ? (
         <>
           {roomStatus === 'failed'
@@ -157,7 +173,8 @@ function RoomControls() {
           <button className="button subtle" aria-expanded={joinOpen} onClick={() => setJoinOpen(!joinOpen)}>
             <DoorOpen size={17} aria-hidden /> 加入房间
           </button>
-          {roomStatus === 'failed' && <button className="button subtle" onClick={leaveRoom}>返回单机</button>}
+          {roomStatus === 'failed' && <><button className="button" onClick={createRoom}>重试连接</button>
+            <button className="button subtle" onClick={leaveRoom}>返回单机</button></>}
         </>
       )}
       {joinOpen && !roomId && (
@@ -174,6 +191,7 @@ function RoomControls() {
       {copyMessage && <p className="field-message" role="status">{copyMessage}</p>}
       {showLink && <input ref={inviteField} aria-label="邀请链接" readOnly value={window.location.href} />}
       <RoomEnvironmentControls />
+      <FocusMembers />
       <RoomChat />
       <OfflineControls />
     </section>
@@ -346,8 +364,12 @@ function StudyRoom() {
 }
 
 export default function App() {
-  if (import.meta.env.MODE === 'formal') {
-    return <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />} />
-  }
-  return <StudyRoom />
+  const [sceneCovered, setSceneCovered] = useState(false)
+  return <RoomAudioProvider>
+    {refinedScene
+      ? <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />} onSceneCovered={setSceneCovered} />
+      : <StudyRoom />}
+    <FocusClock covered={sceneCovered} />
+    {!sceneCovered && <RoomAudioHint />}
+  </RoomAudioProvider>
 }
