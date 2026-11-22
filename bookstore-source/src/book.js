@@ -262,12 +262,13 @@ void main() {`
 /*  分页贴图缓存（GPU 驻留上限，按需上传，避免 27 张超采样贴图爆显存）    */
 /* ------------------------------------------------------------------ */
 
-function createPageCache(uris, { quality } = {}) {
+function createPageCache(sources, { quality } = {}) {
   const max = quality === 'low' ? 6 : 10;
   const loader = new THREE.TextureLoader();
   const entries = new Map(); // index -> { tex, loading, used, promise }
   let clock = 0;
   const readyCbs = [];
+  const errorCbs = [];
   const maxAniso = quality === 'low' ? 4 : 16;
   let disposed = false;
   let pinned = new Set();
@@ -290,16 +291,18 @@ function createPageCache(uris, { quality } = {}) {
   }
 
   function request(i) {
-    if (disposed || i < 0 || i >= uris.length) return null;
+    if (disposed || !sources[i]) return null;
     let e = entries.get(i);
     if (e) {
       touch(i);
       return e.promise;
     }
-    e = { tex: null, loading: true, used: ++clock, promise: null };
+    const controller = new AbortController();
+    e = { tex: null, used: ++clock, promise: null, controller };
     entries.set(i, e);
-    e.promise = loader
-      .loadAsync(uris[i])
+    const source = sources[i];
+    e.promise = Promise.resolve()
+      .then(() => typeof source === 'function' ? source(i, controller.signal) : loader.loadAsync(source))
       .then((tex) => {
         if (disposed || entries.get(i) !== e) { tex.dispose(); return null; }
         const image = tex.image;
@@ -318,14 +321,15 @@ function createPageCache(uris, { quality } = {}) {
         tex.generateMipmaps = true;
         tex.needsUpdate = true;
         e.tex = tex;
-        e.loading = false;
         readyCbs.forEach((cb) => cb(i, tex));
         evict();
         return tex;
       })
       .catch((err) => {
+        if (disposed || controller.signal.aborted || entries.get(i) !== e) return null;
+        entries.delete(i);
         console.warn('[book] page texture failed', i, err);
-        if (entries.get(i) === e) entries.delete(i);
+        errorCbs.forEach((cb) => cb(i));
         return null;
       });
     return e.promise;
@@ -355,6 +359,7 @@ function createPageCache(uris, { quality } = {}) {
       for (const [i, entry] of entries) {
         if (wanted.has(i) || pinned.has(i)) continue;
         entries.delete(i);
+        entry.controller.abort();
         entry.tex?.dispose();
       }
       this.ensure(indices);
@@ -363,13 +368,12 @@ function createPageCache(uris, { quality } = {}) {
     onReady(cb) {
       readyCbs.push(cb);
     },
-    get count() {
-      return uris.length;
-    },
+    onError(cb) { errorCbs.push(cb); },
     dispose() {
       disposed = true;
       readyCbs.length = 0;
-      for (const [, e] of entries) e.tex?.dispose();
+      errorCbs.length = 0;
+      for (const [, e] of entries) { e.controller.abort(); e.tex?.dispose(); }
       entries.clear();
     },
   };
@@ -379,7 +383,9 @@ function createPageCache(uris, { quality } = {}) {
 /*  主角                                                              */
 /* ------------------------------------------------------------------ */
 
-export function createBook(scene, pageSources, coverTexture, labels, { quality = 'high' } = {}) {
+export function createBook(scene, pageSources, coverTexture, labels, {
+  quality = 'high', initialPage = 0, initialView = 'spread',
+} = {}) {
   const root = new THREE.Group();
   root.name = 'hero-book';
   scene.add(root);
@@ -394,25 +400,25 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
   group.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), baseTilt));
   root.add(group);
 
-  /* ---------- 贴图来源：既接受 dataURI 数组，也接受已加载的 Texture ---------- */
-  const uris = [];
+  /* URL sources and PDF rasterizers share one bounded texture cache. */
+  const sources = [];
   const preloadedMap = new Map();
   pageSources.forEach((src, idx) => {
-    if (typeof src === 'string') uris.push(src);
+    if (typeof src === 'string' || typeof src === 'function') sources.push(src);
     else {
-      uris.push(null);
+      sources.push(null);
       preloadedMap.set(idx, src);
     }
   });
-  const cache = createPageCache(uris, { quality });
+  const cache = createPageCache(sources, { quality });
   const pageCount = pageSources.length;
-  const cacheIndexFor = (i) => (uris[i] ? i : -1);
+  const cacheIndexFor = (i) => (sources[i] ? i : -1);
 
   const blankTex = blankPageTexture();
 
   function textureFor(i) {
     if (i < 0 || i >= pageCount) return blankTex;
-    if (!uris[i]) return preloadedMap.get(i) || blankTex;
+    if (!sources[i]) return preloadedMap.get(i) || blankTex;
     return cache.get(i) || blankTex;
   }
 
@@ -659,17 +665,16 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
   /*  状态机                                                            */
   /* ================================================================ */
   const spreadCount = Math.ceil(pageCount / 2);
-  let spread = 0;
+  let single = Math.max(0, Math.min(pageCount - 1, initialPage));
+  let spread = Math.floor(single / 2);
   let turn = null;
   let reducedMotion = false;
   let hover = 0;
   let hoverTarget = 0;
-  const listeners = { spread: [], turn: [] };
+  const listeners = { spread: [], turn: [], error: [] };
   let visibleState = 'closed';
   /** 'spread' 双页跨页 ｜ 'single' 单页（适合认真阅读） */
-  let view = pageCount === 1 ? 'single' : 'spread';
-  /** 选中的页；双页跨页里也可以选择右页。 */
-  let single = 0;
+  let view = pageCount === 1 || initialView === 'single' ? 'single' : 'spread';
 
   const pageIndexLeft = () => (view === 'single' ? single : spread * 2);
   const pageIndexRight = () =>
@@ -746,8 +751,24 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
       if (pagesReady(pendingJump, pendingPage)) applySpread(pendingJump, pendingPage);
       return;
     }
+    if (pendingView) {
+      if (pagesReady(Math.floor(single / 2), single, pendingView)) applyView(pendingView);
+      return;
+    }
     if (pendingTurn) { const direction = pendingTurn; pendingTurn = 0; startTurn(direction); return; }
     refreshStatic();
+  });
+  cache.onError((index) => {
+    const target = pendingJump >= 0
+      ? indicesFor(pendingPage, view)
+      : pendingView ? indicesFor(single, pendingView)
+        : pendingTurn ? indicesFor(view === 'single' ? single + pendingTurn : (spread + pendingTurn) * 2, view) : [];
+    if (!target.includes(index)) return;
+    pendingJump = pendingPage = -1;
+    pendingTurn = 0;
+    pendingView = null;
+    if (!turn) cache.pin([pageIndexLeft(), pageIndexRight()]);
+    listeners.error.forEach((cb) => cb(index));
   });
 
   function emitSpread() {
@@ -755,7 +776,7 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
   }
 
   function startTurn(dir) {
-    if (turn) return false;
+    if (turn || pendingJump >= 0 || pendingView) return false;
 
     /* ---------- 单页模式：一次只翻一页，纸向右/左扫出画面 ---------- */
     if (view === 'single') {
@@ -989,16 +1010,22 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
   let pendingJump = -1;
   let pendingPage = -1;
   let pendingTurn = 0;
+  let pendingView = null;
 
   /** 某一页是否已经有可渲染贴图（预载贴图或缓存命中） */
   function pageReady(i) {
     if (i < 0 || i >= pageCount) return true;
-    if (!uris[i]) return !!preloadedMap.get(i);
+    if (!sources[i]) return !!preloadedMap.get(i);
     return cache.isReady(i);
   }
 
-  function pagesReady(target, index = target * 2) {
-    return view === 'single' ? pageReady(index) : pageReady(target * 2) && pageReady(target * 2 + 1);
+  function indicesFor(index, layout) {
+    const left = Math.floor(index / 2) * 2;
+    return layout === 'single' ? [index] : [left, left + 1];
+  }
+
+  function pagesReady(target, index = target * 2, layout = view) {
+    return indicesFor(index, layout).every(pageReady);
   }
 
   function applySpread(target, pageIdx) {
@@ -1019,16 +1046,17 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
     pageIdx = Math.max(0, Math.min(pageCount - 1, Math.floor(pageIdx)));
     const target = Math.max(0, Math.min(spreadCount - 1, Math.floor(pageIdx / 2)));
     if (!turn && pageIdx === single) {
-      pendingJump = pendingPage = -1; pendingTurn = 0; return false;
+      pendingJump = pendingPage = -1; pendingTurn = 0; pendingView = null; refreshStatic(); return false;
     }
     pendingTurn = 0;
+    pendingView = null;
     if (!turn && pagesReady(target, pageIdx)) {
       applySpread(target, pageIdx);
       return true;
     }
     pendingJump = target;
     pendingPage = pageIdx;
-    const wanted = view === 'single' ? [pageIdx] : [target * 2, target * 2 + 1];
+    const wanted = indicesFor(pageIdx, view);
     if (!turn) cache.pin([pageIndexLeft(), pageIndexRight(), ...wanted]);
     cache.keep(wanted.map(cacheIndexFor).filter((i) => i >= 0));
     return true;
@@ -1038,6 +1066,7 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
   const prev = () => startTurn(-1);
   const onSpread = (cb) => listeners.spread.push(cb);
   const onTurn = (cb) => listeners.turn.push(cb);
+  const onPageError = (cb) => listeners.error.push(cb);
   const getSpread = () => spread;
   const getPages = () => ({
     left: pageIndexLeft(),
@@ -1057,11 +1086,23 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
     if (turn) return false;
     pendingJump = pendingPage = -1;
     pendingTurn = 0;
+    if (!pagesReady(Math.floor(single / 2), single, want)) {
+      pendingView = want;
+      const wanted = indicesFor(single, want);
+      cache.pin([pageIndexLeft(), pageIndexRight(), ...wanted]);
+      cache.keep(wanted.map(cacheIndexFor).filter((i) => i >= 0));
+      return true;
+    }
+    applyView(want);
+    return true;
+  }
+
+  function applyView(want) {
+    pendingView = null;
     spread = Math.floor(single / 2);
     view = want;
     refreshStatic();
     emitSpread();
-    return true;
   }
 
   const getView = () => view;
@@ -1122,7 +1163,7 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
     textures.forEach(texture => {
       if (texture !== coverTexture && texture !== WHITE.tex && texture !== _blankTex) texture.dispose();
     });
-    listeners.turn.length = listeners.spread.length = 0;
+    listeners.turn.length = listeners.spread.length = listeners.error.length = 0;
     scene.remove(root);
   }
 
@@ -1156,12 +1197,13 @@ export function createBook(scene, pageSources, coverTexture, labels, { quality =
     getPageCorners,
     onSpread,
     onTurn,
+    onPageError,
     getSpread,
     getPages,
     isTurning,
     preload,
-    waitForVisible: () => Promise.all([pageIndexLeft(), pageIndexRight()].map(cacheIndexFor)
-      .filter((index) => index >= 0).map(cache.request)),
+    waitForVisible: async () => (await Promise.all([pageIndexLeft(), pageIndexRight()].map(cacheIndexFor)
+      .filter((index) => index >= 0).map(cache.request))).every(Boolean),
     get residentPages() { return cache.resident; },
     dispose,
     labels,

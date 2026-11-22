@@ -32,7 +32,7 @@ const ROOM_SHADOW = 0x1d2730;
 /*  书籍结构（与重排版 13 的 34 页逐页对应）                              */
 /* ------------------------------------------------------------------ */
 
-const PAGES = [
+const BUILTIN_LABELS = [
   '封面',
   '扉页',
   '版权页',
@@ -68,6 +68,7 @@ const PAGES = [
   '自由田野手记',
   '封底',
 ];
+let PAGES = BUILTIN_LABELS;
 
 /** 章节快速跳转（page 为 0 基页索引） */
 const CHAPTERS = [
@@ -163,6 +164,8 @@ let loaderHideTimer = 0;
 let lastInteraction = performance.now();
 let entryStarted = null;
 let originalCover = null;
+let builtinPage = 0;
+const builtinBookmarkKey = __STUDY_COMPANION__ ? 'study-companion-earth-page-v1' : '';
 let orbitZoom = 1;
 let orbitBreath = 0;
 const orbitTouches = new Map();
@@ -549,21 +552,7 @@ function toggleView() {
   if (!book || APP.state.mode !== 'reading') return;
   const next = book.getView() === 'single' ? 'spread' : 'single';
   if (!book.setView(next)) return;
-  shadowCache?.invalidate();
-  APP.state.view = next;
   APP.state.viewUserSet = true;
-  fitReadingPage(false);
-  markFrameDirty();
-  markRectDirty();
-  const btn = $('#btnSingle');
-  if (btn) {
-    btn.setAttribute('aria-pressed', String(next === 'single'));
-    btn.classList.toggle('is-active', next === 'single');
-    const label = btn.querySelector('.read-bar__label');
-    if (label) label.textContent = next === 'single' ? '双页' : '单页';
-  }
-  updateReadingHud();
-  showToast(next === 'single' ? '单页阅读 · 可拖拽平移、滚轮放大' : '双页跨页阅读', 2200);
 }
 
 /* ------------------------------------------------------------------ */
@@ -608,6 +597,10 @@ function updateReadingHud() {
   const chapters = $('#chapterNav');
   if (chapters) chapters.hidden = APP.state.pdfMode;
   const p = book.getPages();
+  $('#pdfReadingTools').hidden = !APP.state.pdfMode;
+  const pdfPage = $('#pdfPageInput');
+  pdfPage.max = String(p.count);
+  pdfPage.placeholder = String(p.active + 1);
   const chapterEl = $('#readChapter');
   const pageEl = $('#readPage');
   const onePage = p.right < 0 || p.right === p.left;
@@ -643,6 +636,7 @@ function updateReadingHud() {
     singleBtn.disabled = p.count < 2;
     singleBtn.setAttribute('aria-pressed', String(isSingleView));
     singleBtn.classList.toggle('is-active', isSingleView);
+    singleBtn.querySelector('.read-bar__label').textContent = isSingleView ? '双页' : '单页';
   }
 
   // 目录高亮实际选择的页，双页模式下也可能是右页。
@@ -1531,32 +1525,53 @@ function pageScreenRect() {
   return { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
 }
 
-function mountBook(sources, coverTex, bookmarkKey = '') {
+function prepareBook(sources, labels, initialPage = 0) {
+  const initialView = APP.state.viewUserSet && book ? book.getView()
+    : window.innerWidth < 760 || (camera.aspect || 1.6) < 0.92 ? 'single' : 'spread';
+  const candidate = createBook(scene, sources, originalCover, labels, {
+    quality: APP.state.quality, initialPage, initialView,
+  });
+  candidate.root.visible = false;
+  candidate.setReducedMotion(APP.state.reducedMotion);
+  return candidate;
+}
+
+function activateBook(candidate, nextImporter = null) {
   const previous = book;
-  const previousView = previous?.getView?.();
-  book = createBook(scene, sources, coverTex, PAGES, { quality: APP.state.quality });
+  const previousImporter = importer;
+  book = candidate;
+  importer = nextImporter;
+  APP.state.pdfMode = Boolean(importer);
+  APP.state.view = book.getView();
+  PAGES = book.labels;
+  book.root.visible = true;
   previous?.dispose?.();
+  previousImporter?.dispose();
   bookRestPose = { position: book.group.position.clone(), quaternion: book.group.quaternion.clone() };
-  book.setReducedMotion(APP.state.reducedMotion);
-  book.onSpread((_spread,left) => {
+  book.onSpread(() => {
+    const view = book.getView();
+    if (APP.state.view !== view) {
+      APP.state.view = view;
+      shadowCache?.invalidate();
+      markRectDirty();
+      if (APP.state.mode === 'reading') fitReadingPage(false);
+    }
     markFrameDirty();
     updateReadingHud();
-    if (bookmarkKey && APP.state.mode === 'reading') {
-      try { localStorage.setItem(bookmarkKey,String(left)); } catch { /* Storage may be disabled. */ }
+    if (!APP.state.pdfMode) {
+      builtinPage = book.getPages().active;
+      if (builtinBookmarkKey && APP.state.mode === 'reading') {
+        try { localStorage.setItem(builtinBookmarkKey, String(builtinPage)); } catch {}
+      }
     }
   });
   book.onTurn(() => {updateReadingHud();shadowCache?.invalidate();});
-  if (sources.length === 1 || previousView === 'single') book.setView('single');
-  if (bookmarkKey) {
-    try {
-      const page = Number(localStorage.getItem(bookmarkKey));
-      if (Number.isInteger(page) && page > 0 && page < sources.length) book.jumpToPage(page);
-    } catch { /* Storage may be disabled. */ }
-  }
-  book.preload?.(2);
+  book.onPageError((index) => showToast(`第 ${index + 1} 页加载失败，可以重试。`));
+  book.pageScreenRect = () => pageScreenRect();
+  shadowCache?.invalidate();
   markFrameDirty();
-  if (book) book.pageScreenRect = () => pageScreenRect();
-  return book;
+  buildToc();
+  updateReadingHud();
 }
 
 function showLoader(text) {
@@ -1613,78 +1628,99 @@ function wireDropZone() {
   });
 }
 
-function encodePdfPage(source) {
-  const maxHeight = 2400;
+function pdfPageTexture(source, maxHeight) {
   const aspect = source.width / source.height;
-  if (Math.abs(aspect / BOOK_PAGE_ASPECT - 1) < .001 && source.height <= maxHeight) {
-    return source.toDataURL('image/webp',.9);
+  let canvas = source;
+  if (Math.abs(aspect / BOOK_PAGE_ASPECT - 1) >= .001) {
+    canvas = document.createElement('canvas');
+    canvas.height = Math.min(maxHeight, Math.ceil(Math.max(source.height, source.width / BOOK_PAGE_ASPECT)));
+    canvas.width = Math.round(canvas.height * BOOK_PAGE_ASPECT);
+    const ctx = canvas.getContext('2d');
+    const scale = Math.min(canvas.width / source.width, canvas.height / source.height);
+    const width = source.width * scale, height = source.height * scale;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+    source.width = source.height = 1;
   }
-  const canvas = document.createElement('canvas');
-  canvas.height = Math.min(maxHeight, Math.ceil(Math.max(source.height, source.width / BOOK_PAGE_ASPECT)));
-  canvas.width = Math.round(canvas.height * BOOK_PAGE_ASPECT);
-  const ctx = canvas.getContext('2d');
-  const scale = Math.min(canvas.width/source.width, canvas.height/source.height);
-  const width = source.width*scale, height = source.height*scale;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(source,(canvas.width-width)/2,(canvas.height-height)/2,width,height);
-  return canvas.toDataURL('image/webp',.9);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.addEventListener('dispose', () => { canvas.width = canvas.height = 1; });
+  return texture;
+}
+
+function canReplaceBook() {
+  return book && !APP.state.importing && !shelfInspection?.active && ['explore', 'reading'].includes(APP.state.mode);
+}
+
+function showSelectedBook() {
+  if (APP.state.mode === 'reading') {
+    applyBookMix(1);
+    applyBookTransfer(1);
+    fitReadingPage(false);
+    markRectDirty();
+  } else enterReading();
 }
 
 async function handlePdfFiles(files) {
-  if (!importer) return;
   const list = Array.from(files || []);
   if (!list.length) return;
-  if (APP.state.importing || APP.state.mode==='transitioning' || APP.state.mode==='intro') {
+  if (!canReplaceBook()) {
     showToast('请等当前动作完成后再导入书稿',2500);return;
   }
   if (APP.state.locomotion==='walk')leaveWalk({announce:false});
   APP.state.importing=true;
   setDropOverlay(false);
   showLoader('正在解析书稿…');
+  let candidate;
+  let failure;
+  const mobile = APP.state.quality === 'low';
+  const edge = mobile ? 1720 : 2400;
+  const reader = createPdfImporter({
+    onDemand: true,
+    maxPageEdge: edge,
+    onError: (error) => { failure = error; },
+    onProgress: (pct, label) => setProgress(Math.min(70, pct), label),
+  });
   try {
-    const meta = await importer.handleFiles(list);
-    const count = (meta && meta.count) || importer.getPageCount() || 0;
-    if (!count) throw new Error('这本 PDF 里没有可显示的页面');
-    const label = (meta && meta.name) || (list[0].name || '本地书稿').replace(/\.pdf$/i, '');
-
-    const scale = APP.state.quality === 'low' ? 1.9 : 2.6;
-    const uris = [];
-    for (let i = 0; i < count; i++) {
-      setProgress(8 + (i / count) * 88, `正在排版第 ${i + 1} / ${count} 页…`);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const canvas = meta?.pages?.[i]?.canvas || await importer.renderPage(i, scale);
-      if (!canvas) throw new Error(`第 ${i + 1} 页渲染失败`);
-      uris.push(encodePdfPage(canvas));
-    }
-
-    mountBook(uris, originalCover);
-    await book.waitForVisible();
-    PAGES.length = 0;
-    for (let i = 0; i < count; i++) PAGES.push(`${label} · 第 ${i + 1} 页`);
-    APP.state.pdfMode = true;
-
-    buildToc();
-
-    setProgress(100, '书稿已装订完成');
-    await new Promise((r) => setTimeout(r, 260));
-    hideLoader();
-
-    if (APP.state.mode !== 'reading') {
-      APP.state.mode = 'explore';
-      enterReading();
-    } else {
-      applyBookMix(1);
-      applyBookTransfer(1);
-      markFrameDirty();
-    }
-    updateReadingHud();
-    showToast(`已换成新书 · ${count} 页`, 4200);
+    const meta = await reader.handleFiles(list);
+    if (!meta?.count) throw failure ?? new Error('这本 PDF 里没有可显示的页面');
+    setProgress(80, '正在准备首屏书页…');
+    const load = async (index, signal) => pdfPageTexture(await reader.renderPage(index, mobile ? 1.9 : 2.6, signal), edge);
+    candidate = prepareBook(Array(meta.count).fill(load), meta.labels);
+    if (!await candidate.waitForVisible()) throw new Error('首页加载失败，请重试。');
+    activateBook(candidate, reader);
+    showSelectedBook();
+    setProgress(100, '书稿已就绪');
+    showToast(`已打开本地书稿 · ${meta.count} 页`);
   } catch (err) {
-    hideLoader();
-    showToast(`导入失败：${err && err.message ? err.message : err}`, 6000);
+    if (book !== candidate) candidate?.dispose();
+    if (importer !== reader) reader.dispose();
+    showToast(`导入失败 · ${err.message || err}`, 6000);
   } finally {
-    APP.state.importing=false;
+    hideLoader();
+    APP.state.importing = false;
+  }
+}
+
+async function restoreBuiltinBook() {
+  if (!APP.state.pdfMode || !canReplaceBook()) return;
+  if (APP.state.locomotion === 'walk') leaveWalk({ announce: false });
+  APP.state.importing = true;
+  showLoader('正在打开《地球 Online》…');
+  let candidate;
+  try {
+    candidate = prepareBook(window.__ASSETS__.pages, BUILTIN_LABELS, builtinPage);
+    if (!await candidate.waitForVisible()) throw new Error('书页暂不可用，请重试。');
+    activateBook(candidate);
+    showSelectedBook();
+    $('#btnToc').focus({ preventScroll: true });
+    showToast('已回到《地球 Online》');
+  } catch (err) {
+    if (book !== candidate) candidate?.dispose();
+    showToast(err.message || '暂时无法打开《地球 Online》');
+  } finally {
+    hideLoader();
+    APP.state.importing = false;
   }
 }
 
@@ -2014,6 +2050,16 @@ function wireUi() {
     handlePdfFiles(ev.target.files);
     ev.target.value = '';
   });
+  $('#btnBuiltinBook').addEventListener('click', () => void restoreBuiltinBook());
+  $('#pdfReadingTools').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!APP.state.pdfMode || APP.state.importing) return;
+    const input = $('#pdfPageInput');
+    const index = input.valueAsNumber - 1;
+    if (!Number.isInteger(index) || index < 0 || index >= book.pageCount) return;
+    book.jumpToPage(index);
+    input.value = '';
+  });
   document.querySelectorAll('#chapterNav .chapter-jump').forEach((btn) => {
     btn.addEventListener('click', () => jumpToChapter(btn.dataset.goto));
   });
@@ -2133,8 +2179,15 @@ async function boot() {
     setupMusic();
     setProgress(84, LOADING_STEPS[4]);
 
-    mountBook(sources, coverTexture, __STUDY_COMPANION__ ? 'study-companion-earth-page-v1' : '');
-    await book.waitForVisible();
+    if (builtinBookmarkKey) {
+      try {
+        const saved = Number(localStorage.getItem(builtinBookmarkKey));
+        if (Number.isInteger(saved) && saved >= 0 && saved < sources.length) builtinPage = saved;
+      } catch {}
+    }
+    const firstBook = prepareBook(sources, BUILTIN_LABELS, builtinPage);
+    await firstBook.waitForVisible();
+    activateBook(firstBook);
     setupLivingRoom();
     if (__STUDY_COMPANION__) {
       studyCompanion=installStudyCompanion({
@@ -2142,7 +2195,7 @@ async function boot() {
         getChapter:()=>APP.state.mode==='reading'&&!APP.state.pdfMode?chapterOfPage(book.getPages().active).key:null,
         updateReadingLayout:markRectDirty,
         setEnvironment:applySharedEnvironment,
-        openEarth:()=>{if(!shelfInspection.active)enterReading();},
+        openEarth:()=>{if(!shelfInspection.active)APP.state.pdfMode?void restoreBuiltinBook():enterReading();},
         prepareGuide:()=>{
           if(APP.state.mode!=='explore'||shelfInspection.active)return false;
           if(APP.state.locomotion==='walk')leaveWalk({announce:false});
@@ -2178,10 +2231,6 @@ async function boot() {
       $(id).classList.toggle('is-active', active);
     }
 
-    importer = createPdfImporter({
-      onProgress: (pct, label) => setProgress(pct, label),
-      onError: (e) => console.warn('pdf', e),
-    });
     wireDropZone();
 
     raycaster = new THREE.Raycaster();

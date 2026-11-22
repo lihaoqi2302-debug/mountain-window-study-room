@@ -418,7 +418,7 @@ function clampScale(scale) {
  *   readonly name: string
  * }}
  */
-export function createPdfImporter({ onProgress, onError } = {}) {
+export function createPdfImporter({ onProgress, onError, onDemand = false, maxPageEdge = Infinity } = {}) {
   /** 进度回调（安全调用）。 */
   const report = (percent, label) => {
     if (typeof onProgress !== 'function') return;
@@ -447,6 +447,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
     /** @type {any} pdf.js PDFDocumentProxy */
     doc: null,
     pageCount: 0,
+    rasterCount: 0,
     /** 第 0 页的 width/height（scale=1 的 viewport） */
     aspect: 0,
     baseWidth: 0,
@@ -505,15 +506,20 @@ export function createPdfImporter({ onProgress, onError } = {}) {
    * @param {number} generation 调用时刻的文档代号
    * @returns {Promise<HTMLCanvasElement>}
    */
-  async function rasterize(index, scale, generation) {
+  async function rasterize(index, scale, generation, signal) {
     const doc = state.doc;
     if (!doc) throw userError(MSG.notLoaded);
+    signal?.throwIfAborted();
+    if (generation !== state.generation) throw userError('导入已切换，本次渲染作废。');
 
     const page = await doc.getPage(index + 1); // pdf.js 页号 1-based
     try {
+      signal?.throwIfAborted();
       if (generation !== state.generation) throw userError('导入已切换，本次渲染作废。');
 
-      const viewport = page.getViewport({ scale });
+      let viewport = page.getViewport({ scale });
+      const edge = Math.max(viewport.width, viewport.height);
+      if (edge > maxPageEdge) viewport = page.getViewport({ scale: scale * maxPageEdge / edge });
       const canvas = document.createElement('canvas');
       // 直接按 CSS 像素 1:1 分配，即「设备像素 = 位图像素」，不做任何 DPR 缩放，
       // 保证超采样尺寸精确可控（A4 @3.2 ≈ 2380x3370）。
@@ -528,8 +534,20 @@ export function createPdfImporter({ onProgress, onError } = {}) {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      await page.render({ canvasContext: ctx, viewport, intent: 'display' }).promise;
-      return canvas;
+      const task = page.render({ canvasContext: ctx, viewport, intent: 'display' });
+      const cancel = () => task.cancel();
+      signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        await task.promise;
+        signal?.throwIfAborted();
+        state.rasterCount++;
+        return canvas;
+      } catch (error) {
+        canvas.width = canvas.height = 1;
+        throw error;
+      } finally {
+        signal?.removeEventListener('abort', cancel);
+      }
     } finally {
       // 官方建议每页画完就 cleanup，释放页内临时资源（字体、图像缓存）
       try {
@@ -633,6 +651,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
     const doc = state.doc;
     state.doc = null;
     state.pageCount = 0;
+    state.rasterCount = 0;
     state.aspect = 0;
     state.baseWidth = 0;
     state.baseHeight = 0;
@@ -698,6 +717,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
     try {
       doc = await task.promise;
     } catch (err) {
+      await task.destroy().catch(() => {});
       throw toUserError(err);
     }
 
@@ -747,7 +767,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
 
     // 只预渲染前 EAGER_PAGES 页；其余留给 renderPage 按需。
     // 这是硬性内存约束：每页画布 ~32MB，14 页全画 = 450MB，必崩。
-    const eager = Math.min(EAGER_PAGES, state.pageCount);
+    const eager = onDemand ? 0 : Math.min(EAGER_PAGES, state.pageCount);
     let rendered = 0;
     for (let i = 0; i < eager; i += 1) {
       report((rendered / state.pageCount) * 100, `渲染第 ${i + 1}/${state.pageCount} 页…`);
@@ -760,7 +780,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
 
     report(
       (rendered / state.pageCount) * 100,
-      rendered >= state.pageCount
+      onDemand ? `已读取目录 · ${state.pageCount} 页` : rendered >= state.pageCount
         ? `已就绪：${state.pageCount} 页`
         : `已就绪：${rendered}/${state.pageCount} 页已渲染，其余按需渲染`
     );
@@ -1002,7 +1022,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
    * @param {number} [scale=3.2] 超采样倍率（会被钳制到 0.25~8）
    * @returns {Promise<HTMLCanvasElement>} 已绘制完成的画布
    */
-  async function renderPage(index, scale = DEFAULT_RENDER_SCALE) {
+  async function renderPage(index, scale = DEFAULT_RENDER_SCALE, signal) {
     if (state.disposed) throw userError(MSG.disposed);
     if (!state.doc) throw userError(MSG.notLoaded);
     const i = Number(index);
@@ -1010,6 +1030,8 @@ export function createPdfImporter({ onProgress, onError } = {}) {
       throw userError(MSG.badIndex);
     }
     const s = clampScale(scale);
+    const generation = state.generation;
+    if (onDemand) return enqueue(() => rasterize(i, s, generation, signal));
 
     const hit = cacheGet(i, s);
     if (hit) {
@@ -1017,13 +1039,12 @@ export function createPdfImporter({ onProgress, onError } = {}) {
       return hit;
     }
 
-    const generation = state.generation;
     report(
       (state.cache.size / state.pageCount) * 100,
       `渲染第 ${i + 1}/${state.pageCount} 页…`
     );
 
-    const canvas = await enqueue(() => rasterize(i, s, generation));
+    const canvas = await enqueue(() => rasterize(i, s, generation, signal));
     if (generation !== state.generation) throw userError('导入已切换，本次渲染作废。');
 
     cachePut(i, canvas, s);
@@ -1167,6 +1188,7 @@ export function createPdfImporter({ onProgress, onError } = {}) {
     renderPage,
     getThumbnail,
     getPageCount,
+    getRasterCount: () => state.rasterCount,
     getAspect,
     dispose,
     /** @type {string} 当前文档名（未载入时为空串） */
