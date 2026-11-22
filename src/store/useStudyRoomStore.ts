@@ -1,0 +1,156 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { defaultEnvironment, mergeNotes, rememberRoom } from '../studyContent'
+import type { Note, RoomEnvironment } from '../studyContent'
+
+export type Seat = 'sofa' | 'armchair' | 'desk'
+export type Pose = { x: number; y?: number; z: number; yaw: number; seat?: Seat }
+export const avatarColors = ['#b57a55', '#809384', '#788fa9', '#a67e91', '#c3a36b']
+export const activities = ['随意逛逛', '专注刷题中', '摸鱼发呆']
+export type Profile = { name: string; color: string; activity: string; book: string | null }
+export type Peer = { pose: Pose | null; profile: Profile | null }
+export type RoomStatus = 'solo' | 'connecting' | 'waiting' | 'connected' | 'failed'
+
+interface StudyRoomState {
+  pose: Pose
+  setPose: (pose: Pose) => void
+  name: string
+  color: string
+  setIdentity: (identity: { name: string; color: string }) => void
+  activity: string
+  setActivity: (activity: string) => void
+  openBook: string | null
+  setOpenBook: (id: string | null) => void
+  sceneBook: string | null
+  setSceneBook: (id: string | null) => void
+  bookmarks: Record<string, string>
+  markChapter: (book: string, chapter: string) => void
+  volume: number
+  setVolume: (volume: number) => void
+  roomId: string | null
+  roomStatus: RoomStatus
+  roomMessage: string
+  isHost: boolean
+  hostOnline: boolean
+  environment: RoomEnvironment
+  savedEnvironments: Record<string, RoomEnvironment>
+  setAuthority: (isHost: boolean, hostOnline: boolean) => void
+  applyEnvironment: (environment: RoomEnvironment) => void
+  localNotes: Note[]
+  roomNotes: Record<string, Note[]>
+  saveLocalNote: (note: Note) => void
+  mergeRoomNotes: (id: string, notes: Note[]) => void
+  peers: Record<string, Peer>
+  resetRoom: (id: string | null, status: RoomStatus, message?: string) => void
+  setRoomStatus: (status: RoomStatus, message?: string) => void
+  addPeer: (id: string) => void
+  updatePeer: (id: string, data: Partial<Peer>) => void
+  removePeer: (id: string) => void
+}
+
+type Preferences = Pick<StudyRoomState, 'name' | 'color' | 'bookmarks' | 'volume'
+  | 'localNotes' | 'roomNotes' | 'savedEnvironments'>
+
+export const useStudyRoomStore = create<StudyRoomState>()(
+  persist<StudyRoomState, [], [], Preferences>(
+    (set) => ({
+      pose: { x: 0.28, z: 1.22, yaw: Math.PI / 4 },
+      setPose: (pose) => set({ pose }),
+      name: '读者',
+      color: avatarColors[0],
+      setIdentity: ({ name, color }) => set({ name: name.trim().slice(0, 16) || '读者', color }),
+      activity: activities[0],
+      setActivity: (activity) => set({ activity }),
+      openBook: null,
+      setOpenBook: (openBook) => set({ openBook }),
+      sceneBook: null,
+      setSceneBook: (sceneBook) => set({ sceneBook }),
+      bookmarks: {},
+      markChapter: (book, chapter) => set((state) => ({
+        bookmarks: { ...state.bookmarks, [book]: chapter },
+      })),
+      volume: 0.28,
+      setVolume: (volume) => set({ volume }),
+      roomId: null,
+      roomStatus: 'solo',
+      roomMessage: '',
+      isHost: false,
+      hostOnline: false,
+      environment: defaultEnvironment,
+      savedEnvironments: {},
+      localNotes: [],
+      roomNotes: {},
+      setAuthority: (isHost, hostOnline) => set((state) =>
+        state.isHost === isHost && state.hostOnline === hostOnline ? state : { isHost, hostOnline }),
+      applyEnvironment: (environment) => set((state) => {
+        if (!state.roomId) return state
+        const saved = state.savedEnvironments[state.roomId]
+        if (saved && saved.weather === environment.weather && saved.hearth === environment.hearth
+          && saved.sound === environment.sound) return state
+        return { environment, savedEnvironments: rememberRoom(state.savedEnvironments, state.roomId, environment) }
+      }),
+      saveLocalNote: (note) => set((state) => ({ localNotes: [...state.localNotes, note] })),
+      mergeRoomNotes: (room, notes) => set((state) => {
+        const previous = state.roomNotes[room] ?? []
+        const merged = mergeNotes(previous, notes)
+        return merged === previous ? state : { roomNotes: rememberRoom(state.roomNotes, room, merged) }
+      }),
+      peers: {},
+      resetRoom: (roomId, roomStatus, roomMessage = '') => set((state) => ({
+        roomId, roomStatus, roomMessage, peers: {},
+        isHost: false, hostOnline: false,
+        environment: roomId ? state.savedEnvironments[roomId] ?? defaultEnvironment : defaultEnvironment,
+      })),
+      setRoomStatus: (roomStatus, roomMessage = '') => set((state) => (
+        state.roomStatus === roomStatus && state.roomMessage === roomMessage
+          ? state
+          : { roomStatus, roomMessage }
+      )),
+      addPeer: (id) => set((state) => state.peers[id] ? state : {
+        peers: { ...state.peers, [id]: { pose: null, profile: null } },
+      }),
+      updatePeer: (id, data) => set((state) => state.peers[id] ? {
+        peers: { ...state.peers, [id]: { ...state.peers[id], ...data } },
+      } : state),
+      removePeer: (id) => set((state) => {
+        const peers = { ...state.peers }
+        delete peers[id]
+        return { peers }
+      }),
+    }),
+    {
+      name: 'mountain-window-study-room-v1',
+      partialize: ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments }) =>
+        ({ name, color, bookmarks, volume, localNotes, roomNotes, savedEnvironments }),
+      // Pass only durable changes to storage. Pose updates run at render speed.
+      storage: {
+        getItem: (name) => {
+          try {
+            const value = localStorage.getItem(name)
+            return value ? JSON.parse(value) : null
+          } catch {
+            return null
+          }
+        },
+        setItem: (() => {
+          let last: Preferences | undefined
+          return (name, value) => {
+            const { state } = value
+            if (last && state.name === last.name && state.color === last.color && state.volume === last.volume
+              && state.bookmarks === last.bookmarks && state.localNotes === last.localNotes
+              && state.roomNotes === last.roomNotes && state.savedEnvironments === last.savedEnvironments) return
+            try {
+              localStorage.setItem(name, JSON.stringify(value))
+              last = state
+            } catch {
+              // Private browsing may make storage unavailable.
+            }
+          }
+        })(),
+        removeItem: (name) => {
+          try { localStorage.removeItem(name) } catch { /* Storage unavailable. */ }
+        },
+      },
+    },
+  ),
+)
