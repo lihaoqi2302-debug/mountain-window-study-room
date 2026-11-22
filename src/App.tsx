@@ -9,6 +9,8 @@ import { createRoom, joinStudyRoom, leaveRoom, parseRoomCode } from './online/ro
 import { clearMovement, keyDirections, press, release } from './scene/movement'
 import FormalRoom from './scene/FormalRoom'
 import { ChapterNotes, RoomEnvironmentControls } from './RoomCollaboration'
+import RoomChat from './RoomChat'
+import OfflineControls from './offline/OfflineControls'
 import { activities, avatarColors, useStudyRoomStore } from './store/useStudyRoomStore'
 
 const StudyScene = lazy(() => import('./scene/StudyScene'))
@@ -172,6 +174,8 @@ function RoomControls() {
       {copyMessage && <p className="field-message" role="status">{copyMessage}</p>}
       {showLink && <input ref={inviteField} aria-label="邀请链接" readOnly value={window.location.href} />}
       <RoomEnvironmentControls />
+      <RoomChat />
+      <OfflineControls />
     </section>
   )
 }
