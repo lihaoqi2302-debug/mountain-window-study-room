@@ -134,17 +134,20 @@ export function installStudyCompanion({ scene, room, getState, getWalker, getCha
   document.querySelector('#readCameraTools').append(noteButton);
   const scenePanels = Array.from(document.querySelectorAll('#tocPanel, #musicPanel, #helpPanel, #sceneryPanel, #shelfInspection'));
   const roomTools = document.querySelector('#roomTools');
-  let covered;
+  let covered, reading;
   function announcePanel(force = false) {
     const next = scenePanels.some((panel) => !panel.hidden) || roomTools.classList.contains('is-open');
-    if (force || covered !== next) {
+    const nextReading = document.body.dataset.mode === 'reading';
+    if (force || covered !== next || reading !== nextReading) {
       covered = next;
-      send('scene-panel', { covered });
+      reading = nextReading;
+      send('scene-panel', { covered, reading });
     }
   }
   const panelObserver = new MutationObserver(() => announcePanel());
   for (const panel of scenePanels) panelObserver.observe(panel, { attributes: true, attributeFilter: ['hidden'] });
   panelObserver.observe(roomTools, { attributes: true, attributeFilter: ['class'] });
+  panelObserver.observe(document.body, { attributes: true, attributeFilter: ['data-mode'] });
 
   window.addEventListener('message', ({ source, origin, data }) => {
     if (source !== parent || origin !== target || data?.protocol !== protocol) return;
