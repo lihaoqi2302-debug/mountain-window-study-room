@@ -1,5 +1,6 @@
 const defaults: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }]
 const turn = /^turns?:/i
+export type TurnStatus = 'not-configured' | 'unavailable' | 'configured'
 
 function readServers(value: unknown, allowCredentials: boolean): RTCIceServer[] {
   if (!Array.isArray(value)) return []
@@ -21,15 +22,16 @@ function readServers(value: unknown, allowCredentials: boolean): RTCIceServer[] 
 export async function getIceConfiguration(signal: AbortSignal) {
   let iceServers = defaults
   const configured = import.meta.env.VITE_STUN_SERVERS
+  const turnEndpoint = import.meta.env.VITE_ICE_ENDPOINT
   if (configured) iceServers = [...iceServers, ...readServers([{ urls: configured.split(',').map((url: string) => url.trim()) }], false)]
-  if (import.meta.env.VITE_ICE_ENDPOINT) {
+  if (turnEndpoint) {
     const deadline = new AbortController()
     const abort = () => deadline.abort()
     signal.addEventListener('abort', abort, { once: true })
     const timeout = window.setTimeout(abort, 3000)
     try {
       if (signal.aborted) abort()
-      const endpoint = new URL(import.meta.env.VITE_ICE_ENDPOINT, location.href)
+      const endpoint = new URL(turnEndpoint, location.href)
       if (endpoint.protocol !== 'https:' && endpoint.origin !== location.origin) throw new Error('HTTPS required')
       const response = await fetch(endpoint, { signal: deadline.signal, cache: 'no-store' })
       if (!response.ok) throw new Error('ICE configuration unavailable')
@@ -41,9 +43,11 @@ export async function getIceConfiguration(signal: AbortSignal) {
       signal.removeEventListener('abort', abort)
     }
   }
+  const hasTurn = iceServers.some(({ urls }) => typeof urls === 'string' ? turn.test(urls) : urls.some((url) => turn.test(url)))
+  const turnStatus: TurnStatus = !turnEndpoint ? 'not-configured' : hasTurn ? 'configured' : 'unavailable'
   return {
     config: { iceServers } satisfies RTCConfiguration,
-    turnAvailable: iceServers.some(({ urls }) => typeof urls === 'string' ? turn.test(urls) : urls.some((url) => turn.test(url))),
+    turnStatus,
   }
 }
 
@@ -51,10 +55,10 @@ export type ConnectionDiagnostics = {
   relays: number
   candidates: string
   route: 'unknown' | 'direct' | 'relay' | 'mixed'
-  turnAvailable: boolean
+  turnStatus: TurnStatus
 }
 export const emptyDiagnostics: ConnectionDiagnostics = {
-  relays: 0, candidates: '', route: 'unknown', turnAvailable: false,
+  relays: 0, candidates: '', route: 'unknown', turnStatus: 'not-configured',
 }
 
 export function monitorIce(signal: AbortSignal) {

@@ -27,6 +27,7 @@ const statusLabels = {
   failed: '连接超时或受限',
 }
 const routes = { unknown: '检测中', direct: '直连', relay: '中继', mixed: '直连及中继' }
+const turnLabels = { 'not-configured': '未配置，使用 STUN', unavailable: '暂未取得中继凭据，使用 STUN', configured: '已获取中继凭据' }
 
 function useMovementControls() {
   useEffect(() => {
@@ -156,7 +157,7 @@ function RoomControls() {
         <dl>
           <div><dt>可用信令</dt><dd>{diagnostics.relays} 个公共节点</dd></div>
           <div><dt>ICE 候选</dt><dd>{diagnostics.candidates || '尚未收集'}</dd></div>
-          <div><dt>TURN</dt><dd>{diagnostics.turnAvailable ? '已获取临时配置' : '未配置，使用 STUN'}</dd></div>
+          <div><dt>TURN</dt><dd>{turnLabels[diagnostics.turnStatus]}</dd></div>
           <div><dt>选中链路</dt><dd>{roomStatus === 'connected' ? routes[diagnostics.route] : '尚未连通'}</dd></div>
         </dl>
       </details>}
