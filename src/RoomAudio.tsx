@@ -61,7 +61,7 @@ export function useRoomAudio() {
   return audio
 }
 
-export function RoomAudioHint() {
+export function RoomAudioHint({ suppressed }: { suppressed: boolean }) {
   const { environment, roomId, status, isHost, hostOnline } = store(useShallow((state) => ({
     environment: state.environment, roomId: state.roomId, status: state.roomStatus,
     isHost: state.isHost, hostOnline: state.hostOnline,
@@ -69,7 +69,7 @@ export function RoomAudioHint() {
   const { listening, pending, message, listen } = useRoomAudio()
   const [dismissed, setDismissed] = useState('')
   const key = roomId + ':' + environment.sound
-  if (status !== 'connected' || isHost || !hostOnline || listening || environment.sound === 'quiet' || dismissed === key) return null
+  if (suppressed || status !== 'connected' || isHost || !hostOnline || listening || environment.sound === 'quiet' || dismissed === key) return null
   return <aside className="room-audio-hint" aria-label="共学声音邀请">
     <Volume2 size={17} aria-hidden />
     <div><p>{weatherLabels[environment.weather]} · 房主开启了{soundLabels[environment.sound]}</p>
