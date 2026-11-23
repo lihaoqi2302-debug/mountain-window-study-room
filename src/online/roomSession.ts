@@ -150,9 +150,18 @@ export async function joinStudyRoom(rawId: string, create = false) {
     const identity = room.makeAction<Profile>('profile')
     let noSignalSince = performance.now()
     let negotiatingSince = 0
+    let handshakeFailed = false
     let nextStats = 0
     let route: Awaited<ReturnType<typeof selectedRoute>> | 'mixed' = 'unknown'
-    const restricted = () => fail('已找到好友，但点对点连接受限。可以先单机阅读，或切换网络后重试。')
+    const restricted = () => {
+      if (handshakeFailed) {
+        fail('已找到好友，但房间握手未完成。请双方刷新页面后用同一邀请链接重试。')
+        return
+      }
+      const turnMessage = ice.turnStatus === 'not-configured' ? '当前站点未配置 TURN 中继。'
+        : ice.turnStatus === 'unavailable' ? '暂时未能取得 TURN 中继凭据。' : ''
+      fail(`已找到好友，但点对点连接受限。${turnMessage}可以先单机阅读，或切换网络后重试。`)
+    }
 
     // A peer can leave between checking presence and sending. The next join resends a snapshot.
     const sendMotion = (pose: Pose, target?: string) => void motion.send(pose, { target }).catch(() => {})
@@ -175,11 +184,16 @@ export async function joinStudyRoom(rawId: string, create = false) {
         if (isCurrent()) store.getState().removePeer(peerId)
       }),
       room.onError((error) => {
+        if (!isCurrent()) return
         if (error.code === 'room-full' && !Object.keys(room.getPeers()).length) {
           fail('房间已满，请稍后重试或创建新房间。')
         }
         if (error.code === 'identity-failed') fail('浏览器无法建立联机身份，请重试。')
-        if (['peer-connect-failed', 'handshake-failed'].includes(error.code) && !Object.keys(room.getPeers()).length) restricted()
+        if ((error.code === 'peer-connect-failed' || error.code === 'handshake-failed') && !Object.keys(room.getPeers()).length) {
+          // One peer attempt can fail while another attempt is still negotiating.
+          negotiatingSince ||= performance.now()
+          handshakeFailed ||= error.code === 'handshake-failed'
+        }
       }),
       store.subscribe((next, previous) => {
         if (next.name !== previous.name || next.color !== previous.color
@@ -202,10 +216,11 @@ export async function joinStudyRoom(rawId: string, create = false) {
       const peers = Object.values(room.getPeers())
       const relays = Object.values(getRelaySockets()).filter((socket) => socket.readyState === WebSocket.OPEN).length
       store.getState().setDiagnostics({
-        relays, route, candidates: [...monitor.candidates].sort().join(', '), turnAvailable: ice.turnAvailable,
+        relays, route, candidates: [...monitor.candidates].sort().join(', '), turnStatus: ice.turnStatus,
       })
       if (peers.length) {
         negotiatingSince = 0
+        handshakeFailed = false
         noSignalSince = now
         updateStatus('connected')
         if (now >= nextStats) {
@@ -229,7 +244,7 @@ export async function joinStudyRoom(rawId: string, create = false) {
       if (monitor.pending.size || negotiatingSince) {
         negotiatingSince ||= now
         if (now - negotiatingSince >= negotiationTimeout) restricted()
-        else updateStatus('negotiating', ice.turnAvailable ? '正在尝试直连或 TURN 中继。' : '正在尝试直连，书屋仍可使用。')
+        else updateStatus('negotiating', ice.turnStatus === 'configured' ? '正在尝试直连或 TURN 中继。' : '正在尝试直连，书屋仍可使用。')
       } else if (relays) {
         noSignalSince = now
         updateStatus('waiting')
