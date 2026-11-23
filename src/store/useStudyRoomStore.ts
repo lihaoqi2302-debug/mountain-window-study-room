@@ -116,7 +116,7 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       setDiagnostics: (diagnostics) => set((state) => {
         const current = state.diagnostics
         return current.relays === diagnostics.relays && current.route === diagnostics.route
-          && current.candidates === diagnostics.candidates && current.turnAvailable === diagnostics.turnAvailable
+          && current.candidates === diagnostics.candidates && current.turnStatus === diagnostics.turnStatus
           ? state : { diagnostics }
       }),
       isHost: false,
