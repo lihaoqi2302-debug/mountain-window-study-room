@@ -364,12 +364,12 @@ function StudyRoom() {
 }
 
 export default function App() {
-  const [sceneCovered, setSceneCovered] = useState(false)
+  const [sceneOverlay, setSceneOverlay] = useState({ covered: false, reading: false })
   return <RoomAudioProvider>
     {refinedScene
-      ? <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />} onSceneCovered={setSceneCovered} />
+      ? <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />} onSceneOverlay={setSceneOverlay} />
       : <StudyRoom />}
-    <FocusClock covered={sceneCovered} />
-    {!sceneCovered && <RoomAudioHint />}
+    <FocusClock covered={sceneOverlay.covered} />
+    <RoomAudioHint suppressed={sceneOverlay.covered || sceneOverlay.reading} />
   </RoomAudioProvider>
 }
