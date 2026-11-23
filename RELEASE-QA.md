@@ -33,3 +33,11 @@ MB 以 1,000,000 字节为单位。核心按 Service Worker 清单计，页面�
 | 公网版 | 1.33 MB | 12.79 MB | 三套窗景 7.38 MB |
 
 使用入口、素材清单与中继配置见 [README](README.md)。
+
+## 2026-11-23 · 公网双设备跨网联机
+
+- **真实跨网通过。** 手机使用移动数据，电脑使用 Wi-Fi。手机打开电脑端生成的邀请链接，成功加入同一间公网书屋。
+- **公网同机回归通过。** 三个浏览器会话进入同一房间。双向聊天、窗景同步、成员退出及重新加入均通过。退出联机后仍可阅读《地球 Online》，页码从第 1–2 页翻至第 3–4 页。
+- **连接诊断。** 同机测试选中直连，公网面板显示「TURN 未配置，使用 STUN」。双设备试验未记录候选对，TURN 中继与受限网络下的兜底仍待单独验收。
+
+[公网书屋](https://lihaoqi2302-debug.github.io/mountain-window-study-room/) · [本次受测版本的部署记录](https://github.com/lihaoqi2302-debug/mountain-window-study-room/actions/runs/45115042276)
