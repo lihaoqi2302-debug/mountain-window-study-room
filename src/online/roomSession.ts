@@ -4,6 +4,7 @@ import books from '../data/books.json'
 import { randomId } from '../studyContent'
 import { attachCollaboration } from './roomCollaboration'
 import { getIceConfiguration, monitorIce, selectedRoute } from './ice'
+import type { IceFailure, RouteDetail, RouteKind } from './ice'
 import { validFocus } from '../focus'
 import { networkRoomId, refinedScene } from '../edition'
 
@@ -65,14 +66,33 @@ function readProfile(): Profile {
   return { name, color, activity, book: openBook ?? sceneBook, ...(presence ? { focus: presence } : {}) }
 }
 
+const failureMessages: Record<IceFailure, string> = {
+  timeout: '获取 TURN 中继凭据超时。',
+  aborted: '获取 TURN 中继凭据被中断。',
+  http: 'TURN 凭据服务返回错误。',
+  'bad-json': 'TURN 凭据服务返回的内容无法解析。',
+  network: '无法连接 TURN 凭据服务。',
+  'no-turn-entries': 'TURN 凭据服务未返回可用的中继地址。',
+  'insecure-endpoint': 'TURN 凭据地址不是 HTTPS，已拒绝使用。',
+}
+
+function testRelayUrls() {
+  if (import.meta.env.MODE !== 'test') return []
+  const value = import.meta.env.VITE_TEST_RELAYS as string | undefined
+  return value ? value.split(',').map((url) => url.trim()).filter(Boolean) : []
+}
+
 export function leaveRoom() {
   void closeSession()
   setInvite(null)
   store.getState().resetRoom(null, 'solo')
 }
 
+/** Pause networking for a page entering the back/forward cache. The invite stays so pageshow can rejoin. */
 export function suspendRoom() {
   void closeSession()
+  const { roomId, roomStatus } = store.getState()
+  if (roomStatus !== 'solo') store.getState().resetRoom(roomId, 'connecting')
 }
 
 export function createRoom() {
@@ -125,12 +145,15 @@ export async function joinStudyRoom(rawId: string, create = false) {
     }
 
     const monitor = monitorIce(controller.signal)
+    const relayUrls = testRelayUrls()
     const room = joinRoom({
       appId: networkRoomId,
       maxUsers: 6,
       maxReceiveBytes: 96 * 1024,
       use: [roles({ selfAsAdmin: create })],
-      relayConfig: { warnOnRelayFailure: false },
+      relayConfig: relayUrls.length
+        ? { warnOnRelayFailure: false, urls: relayUrls, redundancy: 1 }
+        : { warnOnRelayFailure: false },
       rtcConfig: ice.config,
       rtcPolyfill: monitor.Connection,
     }, id)
@@ -140,26 +163,57 @@ export async function joinStudyRoom(rawId: string, create = false) {
       for (const remove of listeners) remove()
       try { await room.leave() } catch (error) { console.warn('Room cleanup failed', error) }
     }
-    const identityInfo = await room.getSelf()
+
+    let noSignalSince = performance.now()
+    let negotiatingSince = 0
+    let handshakeFailed = false
+    let nextStats = 0
+    let route: RouteKind = 'unknown'
+    let detail: RouteDetail = { route: 'unknown' }
+
+    // Register before getSelf(): identity failures are reported through onError and would otherwise be lost.
+    listeners.push(room.onError((error) => {
+      if (!isCurrent()) return
+      if (error.code === 'room-full' && !Object.keys(room.getPeers()).length) {
+        fail('房间已满，请稍后重试或创建新房间。')
+      }
+      if (error.code === 'identity-failed') fail('浏览器无法建立联机身份，请重试。')
+      if ((error.code === 'peer-connect-failed' || error.code === 'handshake-failed') && !Object.keys(room.getPeers()).length) {
+        // One peer attempt can fail while another attempt is still negotiating.
+        negotiatingSince ||= performance.now()
+        handshakeFailed ||= error.code === 'handshake-failed'
+      }
+    }))
+
+    let selfTimer: number | undefined
+    const identityInfo = await Promise.race([
+      room.getSelf(),
+      new Promise<null>((resolve) => { selfTimer = window.setTimeout(() => resolve(null), signalingTimeout) }),
+    ]).finally(() => window.clearTimeout(selfTimer))
     if (!isCurrent()) return
+    if (!identityInfo) {
+      fail('联机身份建立超时。可以先单机阅读，或切换网络后重试。')
+      return
+    }
     shareCode = identityInfo.roomId
     setInvite(shareCode)
     store.getState().resetRoom(shareCode, 'connecting')
     listeners.push(attachCollaboration(room, shareCode, identityInfo.isAdmin, shareCode.split('~')[1]))
     const motion = room.makeAction<Pose>('motion')
     const identity = room.makeAction<Profile>('profile')
-    let noSignalSince = performance.now()
-    let negotiatingSince = 0
-    let handshakeFailed = false
-    let nextStats = 0
-    let route: Awaited<ReturnType<typeof selectedRoute>> | 'mixed' = 'unknown'
     const restricted = () => {
       if (handshakeFailed) {
         fail('已找到好友，但房间握手未完成。请双方刷新页面后用同一邀请链接重试。')
         return
       }
-      const turnMessage = ice.turnStatus === 'not-configured' ? '当前站点未配置 TURN 中继。'
-        : ice.turnStatus === 'unavailable' ? '暂时未能取得 TURN 中继凭据。' : ''
+      let turnMessage = ''
+      if (ice.turnStatus === 'not-configured') turnMessage = '当前站点未配置 TURN 中继。'
+      else if (ice.failure && ice.failure !== 'no-turn-entries' || ice.turnStatus === 'unavailable') {
+        turnMessage = ice.failure ? failureMessages[ice.failure] + (ice.httpStatus && ice.failure === 'http' ? `（HTTP ${ice.httpStatus}）` : '')
+          : '暂时未能取得 TURN 中继凭据。'
+      } else if (monitor.counts.relay === 0) {
+        turnMessage = 'TURN 已配置，但未收集到中继候选，可能是中继服务器不可达或凭据已失效。'
+      } else turnMessage = 'TURN 中继候选已收集，但仍未连通，可能被防火墙拦截。'
       fail(`已找到好友，但点对点连接受限。${turnMessage}可以先单机阅读，或切换网络后重试。`)
     }
 
@@ -183,18 +237,6 @@ export async function joinStudyRoom(rawId: string, create = false) {
       room.onPeerLeave(({ peerId }) => {
         if (isCurrent()) store.getState().removePeer(peerId)
       }),
-      room.onError((error) => {
-        if (!isCurrent()) return
-        if (error.code === 'room-full' && !Object.keys(room.getPeers()).length) {
-          fail('房间已满，请稍后重试或创建新房间。')
-        }
-        if (error.code === 'identity-failed') fail('浏览器无法建立联机身份，请重试。')
-        if ((error.code === 'peer-connect-failed' || error.code === 'handshake-failed') && !Object.keys(room.getPeers()).length) {
-          // One peer attempt can fail while another attempt is still negotiating.
-          negotiatingSince ||= performance.now()
-          handshakeFailed ||= error.code === 'handshake-failed'
-        }
-      }),
       store.subscribe((next, previous) => {
         if (next.name !== previous.name || next.color !== previous.color
           || next.activity !== previous.activity || next.openBook !== previous.openBook
@@ -205,8 +247,18 @@ export async function joinStudyRoom(rawId: string, create = false) {
     )
 
     const handleOffline = () => fail('网络已断开，可以继续单机。恢复网络后点击重试。')
+    // Timers are throttled in background tabs; restart the clocks so a resumed tab is not judged as timed out.
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible' || !isCurrent()) return
+      noSignalSince = performance.now()
+      if (negotiatingSince) negotiatingSince = performance.now()
+    }
     window.addEventListener('offline', handleOffline)
-    listeners.push(() => window.removeEventListener('offline', handleOffline))
+    document.addEventListener('visibilitychange', handleVisibility)
+    listeners.push(
+      () => window.removeEventListener('offline', handleOffline),
+      () => document.removeEventListener('visibilitychange', handleVisibility),
+    )
     let lastPose: Pose | undefined
     let lastSent = 0
     interval = window.setInterval(() => {
@@ -216,7 +268,17 @@ export async function joinStudyRoom(rawId: string, create = false) {
       const peers = Object.values(room.getPeers())
       const relays = Object.values(getRelaySockets()).filter((socket) => socket.readyState === WebSocket.OPEN).length
       store.getState().setDiagnostics({
-        relays, route, candidates: [...monitor.candidates].sort().join(', '), turnStatus: ice.turnStatus,
+        relays, route,
+        candidates: [...monitor.candidates].sort().join(', '),
+        counts: { ...monitor.counts },
+        families: { ...monitor.families },
+        localType: detail.localType ?? '',
+        remoteType: detail.remoteType ?? '',
+        protocol: detail.protocol ?? '',
+        relayProtocol: detail.relayProtocol ?? '',
+        turnStatus: ice.turnStatus,
+        turnFailure: ice.failure ?? '',
+        httpStatus: ice.httpStatus ?? 0,
       })
       if (peers.length) {
         negotiatingSince = 0
@@ -226,10 +288,13 @@ export async function joinStudyRoom(rawId: string, create = false) {
         if (now >= nextStats) {
           nextStats = now + 2000
           void Promise.all(peers.map(({ connection }) => connection
-            ? selectedRoute(connection).catch(() => 'unknown' as const)
-            : Promise.resolve('unknown' as const))).then((values) => {
-            const known = values.filter((value) => value !== 'unknown')
-            route = known.includes('direct') && known.includes('relay') ? 'mixed' : known[0] ?? 'unknown'
+            ? selectedRoute(connection).catch((): RouteDetail => ({ route: 'unknown' }))
+            : Promise.resolve<RouteDetail>({ route: 'unknown' }))).then((values) => {
+            if (!isCurrent() || !Object.keys(room.getPeers()).length) return
+            const known = values.filter((value) => value.route !== 'unknown')
+            const kinds = known.map((value) => value.route)
+            route = kinds.includes('direct') && kinds.includes('relay') ? 'mixed' : kinds[0] ?? 'unknown'
+            detail = known[0] ?? { route: 'unknown' }
           })
         }
         if (lastPose !== state.pose || now - lastSent >= idleInterval) {
@@ -241,6 +306,7 @@ export async function joinStudyRoom(rawId: string, create = false) {
       }
 
       route = 'unknown'
+      detail = { route: 'unknown' }
       if (monitor.pending.size || negotiatingSince) {
         negotiatingSince ||= now
         if (now - negotiatingSince >= negotiationTimeout) restricted()

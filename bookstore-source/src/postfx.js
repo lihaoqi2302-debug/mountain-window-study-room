@@ -506,11 +506,13 @@ export function createPostFX(renderer, scene, camera) {
   /**
    * 'high'   - MSAA x4, DOF during camera motion
    * 'medium' - MSAA x2
-   * 'low'    - no AO, no DOF, MSAA off
+   * 'low'    - no AO, DOF, bloom or MSAA
    */
   function setQuality(level) {
     if (disposed) return;
     state.quality = level === 'low' ? 'low' : level === 'medium' ? 'medium' : 'high';
+    // The unsampled low path can produce transparent frames in software renderers with bloom enabled.
+    bloomPass.enabled = state.quality !== 'low';
 
     const desired = !msaaAvailable
       ? 0

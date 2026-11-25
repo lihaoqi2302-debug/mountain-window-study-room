@@ -53,12 +53,36 @@ function offlineBundle(refinedScene: boolean): Plugin {
   }
 }
 
+// Test-only ICE credential endpoint (mode === 'test'). Behaviour per request: ?ice=<mode>, cookie ice-mode=<mode>,
+// or env TEST_ICE_MODE. Modes: turn (default), 500, bad-json, timeout, no-turn.
+function testIceEndpoint(): Plugin {
+  const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, next: () => void) => {
+    if (!req.url?.startsWith('/__test/ice')) return next()
+    const url = new URL(req.url, 'http://127.0.0.1')
+    const cookie = /(?:^|;\s*)ice-mode=([\w-]+)/.exec(req.headers.cookie ?? '')?.[1]
+    const kind = url.searchParams.get('ice') ?? cookie ?? process.env.TEST_ICE_MODE ?? 'turn'
+    const port = Number(process.env.TEST_TURN_PORT ?? 3478)
+    res.setHeader('cache-control', 'no-store')
+    if (kind === '500') { res.statusCode = 500; return res.end('test failure') }
+    if (kind === 'timeout') return void setTimeout(() => res.end('[]'), 8000)
+    res.setHeader('content-type', 'application/json')
+    if (kind === 'bad-json') return res.end('{not json')
+    if (kind === 'no-turn') return res.end(JSON.stringify({ iceServers: [{ urls: 'stun:127.0.0.1:' + port }] }))
+    res.end(JSON.stringify({ iceServers: [{ urls: [`turn:127.0.0.1:${port}?transport=udp`], username: 'test', credential: 'test' }] }))
+  }
+  return {
+    name: 'study-room-test-ice',
+    configureServer(server) { server.middlewares.use(handler) },
+    configurePreviewServer(server) { server.middlewares.use(handler) },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const refinedScene = mode === 'formal' || mode === 'public'
   return ({
   base: './',
   publicDir: mode === 'formal' ? '.formal' : mode === 'public' ? '.public-room' : 'public',
-  plugins: [react(), tailwindcss(), offlineBundle(refinedScene)],
+  plugins: [react(), tailwindcss(), offlineBundle(refinedScene), ...(mode === 'test' ? [testIceEndpoint()] : [])],
   build: {
     outDir: mode === 'formal' ? 'dist-formal' : mode === 'public' ? 'dist-public' : 'dist',
     target: ['es2022', 'safari16.4', 'chrome110'],

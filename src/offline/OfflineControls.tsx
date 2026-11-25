@@ -99,8 +99,8 @@ export default function OfflineControls() {
       {status === 'update' && <p className="field-message">离线版可更新 · {savedRevision?.slice(0, 6)} → {revision?.slice(0, 6)}</p>}
       {extra.map((name) => (
         <label className="cache-pack" key={name}>
-          <input type="checkbox" checked={selected.includes(name) || Boolean(packs?.[name]?.saved && status !== 'update')}
-            disabled={busy || Boolean(packs?.[name]?.saved && status !== 'update')}
+          <input type="checkbox" checked={selected.includes(name) || Boolean(packs?.[name]?.saved)}
+            disabled={busy || Boolean(packs?.[name]?.saved)}
             onChange={(event) => setSelected((previous) => event.target.checked ? [...previous, name] : previous.filter((item) => item !== name))} />
           {packLabels[name]} · {mb(packs?.[name]?.bytes ?? 0)}
         </label>

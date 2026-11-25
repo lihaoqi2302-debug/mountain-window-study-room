@@ -6,6 +6,7 @@ import { startAmbientSound } from './audio/ambience'
 import type { AmbientSound } from './audio/ambience'
 import books from './data/books.json'
 import { createRoom, joinStudyRoom, leaveRoom, parseRoomCode } from './online/roomSession'
+import { exportDiagnostics } from './online/diagnostics'
 import { clearMovement, keyDirections, press, release } from './scene/movement'
 import FormalRoom from './scene/FormalRoom'
 import { ChapterNotes, RoomEnvironmentControls } from './RoomCollaboration'
@@ -95,6 +96,7 @@ function RoomControls() {
   })))
   const [copyMessage, setCopyMessage] = useState('')
   const [showLink, setShowLink] = useState(false)
+  const [diagMessage, setDiagMessage] = useState('')
   const [joinOpen, setJoinOpen] = useState(false)
   const [joinValue, setJoinValue] = useState('')
   const [joinError, setJoinError] = useState('')
@@ -121,6 +123,15 @@ function RoomControls() {
     } catch {
       setCopyMessage('请选择下方链接并复制')
       setShowLink(true)
+    }
+  }
+
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(exportDiagnostics())
+      setDiagMessage('诊断信息已复制（已脱敏）')
+    } catch {
+      setDiagMessage('无法访问剪贴板，请稍后重试')
     }
   }
 
@@ -158,8 +169,13 @@ function RoomControls() {
           <div><dt>可用信令</dt><dd>{diagnostics.relays} 个公共节点</dd></div>
           <div><dt>ICE 候选</dt><dd>{diagnostics.candidates || '尚未收集'}</dd></div>
           <div><dt>TURN</dt><dd>{turnLabels[diagnostics.turnStatus]}</dd></div>
-          <div><dt>选中链路</dt><dd>{roomStatus === 'connected' ? routes[diagnostics.route] : '尚未连通'}</dd></div>
+          <div><dt>候选计数</dt><dd>主机 {diagnostics.counts.host} · 反射 {diagnostics.counts.srflx + diagnostics.counts.prflx} · 中继 {diagnostics.counts.relay}</dd></div>
+          <div><dt>地址族</dt><dd>IPv4 {diagnostics.families.v4} · IPv6 {diagnostics.families.v6} · mDNS {diagnostics.families.mdns}</dd></div>
+          <div><dt>选中链路</dt><dd>{roomStatus === 'connected' ? routes[diagnostics.route] : '尚未连通'}{roomStatus === 'connected' && diagnostics.localType
+            ? `（${diagnostics.localType}/${diagnostics.remoteType || '?'} · ${diagnostics.protocol || '?'}${diagnostics.relayProtocol ? ` · 中继 ${diagnostics.relayProtocol}` : ''}）` : ''}</dd></div>
         </dl>
+        <button className="button subtle" onClick={() => void copyDiagnostics()}>复制诊断</button>
+        {diagMessage && <p className="field-message" role="status">{diagMessage}</p>}
       </details>}
       {roomId ? (
         <>

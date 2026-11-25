@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { chatLimit, defaultEnvironment, mergeRecent, noteLimit, rememberRoom } from '../studyContent'
 import type { Note, RoomEnvironment, RoomMessage } from '../studyContent'
-import { emptyDiagnostics } from '../online/ice'
+import { emptyDiagnostics, sameDiagnostics } from '../online/ice'
 import type { ConnectionDiagnostics } from '../online/ice'
 import { initialFocus, localDay } from '../focus'
 import type { FocusPresence, FocusTimer } from '../focus'
@@ -115,9 +115,7 @@ export const useStudyRoomStore = create<StudyRoomState>()(
       diagnostics: emptyDiagnostics,
       setDiagnostics: (diagnostics) => set((state) => {
         const current = state.diagnostics
-        return current.relays === diagnostics.relays && current.route === diagnostics.route
-          && current.candidates === diagnostics.candidates && current.turnStatus === diagnostics.turnStatus
-          ? state : { diagnostics }
+        return sameDiagnostics(current, diagnostics) ? state : { diagnostics }
       }),
       isHost: false,
       hostOnline: false,

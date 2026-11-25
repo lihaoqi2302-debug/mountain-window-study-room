@@ -2,6 +2,10 @@ node_modules/
 dist/
 dist-formal/
 dist-public/
+dist-public.next/
+dist-public.prev/
+.public-room.old/
+.formal.old/
 dist-model/
 .formal/
 .public-room/
@@ -10,3 +14,6 @@ dist-model/
 !.env.example
 public/draco/
 *.log
+
+.perf-dist/
+test-results/

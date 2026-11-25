@@ -11,9 +11,19 @@ const profile = manifest[name]
 const target = resolve(root, name === 'full' ? '.formal' : '.public-room')
 const sibling = resolve(root, '../cozy-bookstore')
 const embedded = resolve(root, 'bookstore-source')
+// Public builds never pick up a neighbouring private source implicitly: the same commit
+// must produce the same artifact locally and on GitHub Actions.
 const source = process.env.BOOKSTORE_SOURCE ? resolve(process.env.BOOKSTORE_SOURCE)
-  : existsSync(resolve(sibling, 'build.mjs')) ? sibling : embedded
+  : name === 'full' && existsSync(resolve(sibling, 'build.mjs')) ? sibling : embedded
 if (!existsSync(resolve(source, 'build.mjs'))) throw new Error('Bookstore source unavailable')
+if (name === 'public' && source !== embedded && process.env.BOOKSTORE_ALLOW_EXTERNAL !== '1') {
+  throw new Error(`Public build must use ${embedded} (set BOOKSTORE_ALLOW_EXTERNAL=1 to override)`)
+}
+if (source === embedded && !existsSync(resolve(embedded, 'node_modules'))) {
+  throw new Error('bookstore-source dependencies are missing. Run: npm --prefix bookstore-source ci')
+}
+const rev = spawnSync('git', ['-C', source, 'describe', '--always', '--dirty'], { encoding: 'utf8' }).stdout?.trim()
+console.log(`[prepare] profile=${name} source=${source} rev=${rev || 'n/a'}`)
 
 const staging = mkdtempSync(resolve(root, '.bookstore-build-'))
 try {
@@ -24,8 +34,15 @@ try {
   })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error('Bookstore build failed')
-  rmSync(target, { recursive: true, force: true })
-  renameSync(staging, target)
+  // Keep the previous output until the new one is in place.
+  const old = `${target}.old`
+  rmSync(old, { recursive: true, force: true })
+  if (existsSync(target)) renameSync(target, old)
+  try { renameSync(staging, target) } catch (error) {
+    if (existsSync(old)) renameSync(old, target)
+    throw error
+  }
+  rmSync(old, { recursive: true, force: true })
 } finally {
   rmSync(staging, { recursive: true, force: true })
 }

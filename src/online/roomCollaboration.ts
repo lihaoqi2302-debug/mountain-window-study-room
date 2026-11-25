@@ -53,7 +53,7 @@ export function attachCollaboration(room: Room, id: string, host: boolean, owner
   }
 
   environment.onChange((value) => {
-    if (validEnvironment(value)) store.getState().applyEnvironment(value)
+    if (!signal.aborted && validEnvironment(value)) store.getState().applyEnvironment(value)
   }, { ...scope, replay: true })
   comments.onMessage((note) => {
     if (validNote(note)) store.getState().mergeRoomNotes(id, [note])
