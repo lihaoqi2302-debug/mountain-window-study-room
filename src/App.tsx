@@ -19,6 +19,8 @@ import { activities, avatarColors, useStudyRoomStore } from './store/useStudyRoo
 
 const StudyScene = lazy(() => import('./scene/StudyScene'))
 const store = useStudyRoomStore
+// main follows the invite after loading this module and clears invalid codes from the URL.
+const openedFromInvite = new URL(window.location.href).searchParams.has('room')
 const statusLabels = {
   solo: '本地独处',
   connecting: '正在连接信令',
@@ -473,9 +475,21 @@ function StudyRoom() {
 
 export default function App() {
   const [sceneOverlay, setSceneOverlay] = useState({ covered: false, reading: false })
+  const { status, message, peerCount } = store(useShallow((state) => ({
+    status: state.roomStatus,
+    message: state.roomMessage,
+    peerCount: Object.keys(state.peers).length,
+  })))
+  // Once dismissed, later manual room activity should not revive the original invite banner.
+  const [inviteEntryActive, setInviteEntryActive] = useState(openedFromInvite)
+  useEffect(() => store.subscribe((state) => {
+    if (state.roomStatus === 'solo') setInviteEntryActive(false)
+  }), [])
+  const inviteEntry = inviteEntryActive && status !== 'solo' ? roomFeedback(status, message, peerCount) : undefined
   return <RoomAudioProvider>
     {refinedScene
-      ? <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />} onSceneOverlay={setSceneOverlay} />
+      ? <FormalRoom controls={<RoomControls />} identity={<IdentityControls />} reader={<ReadingDialog />}
+          onSceneOverlay={setSceneOverlay} inviteEntry={inviteEntry} />
       : <StudyRoom />}
     <FocusClock covered={sceneOverlay.covered} />
     <RoomAudioHint suppressed={sceneOverlay.covered || sceneOverlay.reading} />

@@ -195,14 +195,50 @@ kbd {
 .formal-shell > iframe { display: block; width: 100%; height: 100%; border: 0; }
 .formal-controls {
   position: fixed; inset: 0 0 0 auto; margin: 0; height: 100dvh; max-height: 100dvh;
-  width: min(350px, 100vw); max-width: 100vw; padding: 16px; overflow-y: auto;
+  width: min(350px, 100vw); max-width: 100vw; overflow: auto; overscroll-behavior: contain;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   border: 1px solid var(--line); background: #23251f; color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .formal-controls::backdrop { background: #17181288; }
-.formal-controls > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.formal-controls > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .formal-controls > header h1 { margin: 0; font-size: 18px; color: var(--brass); }
 .formal-controls > header button { display: grid; place-items: center; min-width: 44px; min-height: 44px; border: 1px solid var(--line); border-radius: 4px; }
 .formal-controls .panel + .panel { margin-top: 10px; }
+.formal-controls .section-head { flex-wrap: wrap; }
+.formal-controls .room-state { white-space: normal; }
+.formal-controls .room-state i, .formal-controls .button svg { flex: none; }
+.formal-controls .room-actions, .formal-controls .invite-fallback { min-width: 0; }
+.formal-controls .invite-fallback { display: grid; gap: 6px; margin-top: 8px; font-size: 12px; }
+.formal-controls :is(input, select, textarea) { max-width: 100%; }
+.formal-controls :is(.button, .book-button, .join-form input, .invite-fallback input, .invite-fallback textarea) { min-height: 44px; }
+.formal-controls :is(.network-diagnostics dd, .chat-log article b) { min-width: 0; }
+.formal-controls .network-diagnostics dt { flex: none; }
+
+.formal-invite-entry, .formal-reading-entry {
+  position: absolute; left: max(12px, env(safe-area-inset-left)); z-index: 1;
+  border: 1px solid #b69b725c; border-radius: 4px; background: #24231ef2; color: var(--ink);
+}
+.formal-invite-entry {
+  top: calc(126px + env(safe-area-inset-top)); display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 10px; width: max-content; max-width: min(21rem, calc(100vw - 24px));
+  padding: 6px 8px; font-size: 12px; overflow-wrap: anywhere;
+}
+.formal-invite-entry div { min-width: 0; flex: 1 1 8rem; }
+.formal-invite-entry strong { color: var(--brass); }
+.formal-invite-entry button, .formal-reading-entry {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; padding: 0 9px; border-radius: 4px; font-size: 12px;
+}
+.formal-invite-entry button { border: 1px solid var(--line); }
+.formal-invite-entry button:hover, .formal-reading-entry:hover { background: #393629; }
+.formal-reading-entry { top: calc(68px + env(safe-area-inset-top)); }
+.formal-reading-entry svg { color: var(--brass); }
+@media (max-width: 720px) {
+  .formal-reading-entry { top: calc(27px + env(safe-area-inset-top)); }
+  .formal-shell:has(.formal-reading-entry) .formal-invite-entry { top: calc(180px + env(safe-area-inset-top)); }
+}
 .environment-controls { display: grid; gap: 8px; border-top: 1px solid var(--line); margin-top: 13px; padding-top: 12px; }
 .environment-controls h3 { margin: 0; color: var(--brass); font-size: 13px; font-weight: 600; }
 .environment-fields { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 6px 9px; font-size: 12px; }
