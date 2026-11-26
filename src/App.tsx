@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, CloudRain, DoorOpen, Flame, Link2, Mountain, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
@@ -22,10 +22,22 @@ const store = useStudyRoomStore
 const statusLabels = {
   solo: '本地独处',
   connecting: '正在连接信令',
-  waiting: '正在寻找房间好友',
+  waiting: '等待好友加入',
   negotiating: '正在建立点对点连接',
   connected: '已连入',
-  failed: '连接超时或受限',
+  failed: '连接失败',
+}
+
+function roomFeedback(status: keyof typeof statusLabels, message: string, count: number) {
+  const details = {
+    solo: '可以直接单机阅读，也可以创建房间或接受好友邀请。',
+    connecting: '正在尝试连接，书屋仍可使用。',
+    waiting: '好友在线并加入同一房间后即可共学，也可以先读书。',
+    negotiating: '正在与好友建立连接，书屋仍可使用。',
+    connected: `房间里有 ${count + 1} 人`,
+    failed: '当前未能连接房间，可以重试或继续单机阅读。',
+  }
+  return { label: statusLabels[status], detail: message || details[status] }
 }
 const routes = { unknown: '检测中', direct: '直连', relay: '中继', mixed: '直连及中继' }
 const turnLabels = { 'not-configured': '未配置，使用 STUN', unavailable: '暂未取得中继凭据，使用 STUN', configured: '已获取中继凭据' }
@@ -94,75 +106,184 @@ function RoomControls() {
     count: Object.keys(state.peers).length,
     diagnostics: state.diagnostics,
   })))
-  const [copyMessage, setCopyMessage] = useState('')
-  const [showLink, setShowLink] = useState(false)
+  const [copyResult, setCopyResult] = useState<{ link?: string; select?: boolean } | null>(null)
   const [diagMessage, setDiagMessage] = useState('')
   const [joinOpen, setJoinOpen] = useState(false)
   const [joinValue, setJoinValue] = useState('')
-  const [joinError, setJoinError] = useState('')
+  const [joinError, setJoinError] = useState(false)
+  const [lastAttempt, setLastAttempt] = useState<'create' | 'join' | null>(null)
   const inviteField = useRef<HTMLInputElement>(null)
   const joinField = useRef<HTMLInputElement>(null)
+  const primaryButton = useRef<HTMLButtonElement>(null)
+  const joinButton = useRef<HTMLButtonElement>(null)
+  const exitButton = useRef<HTMLButtonElement>(null)
+  const nextFocus = useRef<'primary' | 'join' | 'exit' | null>(null)
+  const copyAttempt = useRef(0)
+  const diagAttempt = useRef(0)
+  const canCopy = Boolean(roomId) && (roomStatus === 'waiting' || roomStatus === 'connected' || roomStatus === 'negotiating')
+  const pending = roomStatus === 'connecting' || roomStatus === 'negotiating' || roomStatus === 'waiting'
+  const showJoin = !roomId && !pending
+  const { label, detail } = roomFeedback(roomStatus, roomMessage, count)
 
-  useEffect(() => {
-    setCopyMessage('')
-    setShowLink(false)
-  }, [roomId])
+  useLayoutEffect(() => store.subscribe((state, previous) => {
+    if (state.roomId !== previous.roomId || (state.roomStatus !== previous.roomStatus &&
+      ['solo', 'connecting', 'failed'].includes(state.roomStatus))) {
+      // Invalidate pending clipboard operations, even if the user quickly rejoins the same room.
+      copyAttempt.current += 1
+      diagAttempt.current += 1
+      setCopyResult(null)
+      setDiagMessage('')
+      if (inviteField.current && document.activeElement === inviteField.current) {
+        nextFocus.current = state.roomStatus === 'connecting' ? 'exit' : 'primary'
+      }
+      if (primaryButton.current && document.activeElement === primaryButton.current && state.roomStatus === 'connecting') {
+        nextFocus.current = 'exit'
+      }
+    }
+  }), [])
 
-  useEffect(() => {
-    if (showLink) inviteField.current?.select()
-  }, [showLink])
+  useLayoutEffect(() => {
+    if (!copyResult?.link || !copyResult.select || !canCopy) return
+    inviteField.current?.focus()
+    inviteField.current?.select()
+  }, [canCopy, copyResult])
 
-  useEffect(() => {
-    if (joinOpen) joinField.current?.focus()
-  }, [joinOpen])
+  useLayoutEffect(() => {
+    if (nextFocus.current === 'primary') primaryButton.current?.focus()
+    if (nextFocus.current === 'join') joinButton.current?.focus()
+    if (nextFocus.current === 'exit') exitButton.current?.focus()
+    nextFocus.current = null
+  })
 
-  async function copyInvite() {
+  function setJoinForm(open: boolean) {
+    if (!open) {
+      setJoinValue('')
+      setJoinError(false)
+      nextFocus.current = 'join'
+    }
+    setJoinOpen(open)
+  }
+
+  useLayoutEffect(() => {
+    if (joinOpen && showJoin) joinField.current?.focus()
+  }, [joinOpen, showJoin])
+
+  function beginCreating() {
+    setJoinForm(false)
+    setLastAttempt('create')
+    nextFocus.current = 'exit'
+    createRoom()
+  }
+
+  function returnToSolo() {
+    setJoinForm(false)
+    setLastAttempt(null)
+    nextFocus.current = 'primary'
+    leaveRoom()
+  }
+
+  async function copyInvite(button: HTMLButtonElement) {
+    if (!roomId || !canCopy) return
+    const attempt = ++copyAttempt.current
+    const url = new URL(window.location.href)
+    url.search = ''
+    url.hash = ''
+    url.searchParams.set('room', roomId)
+    const link = url.href
     try {
-      await navigator.clipboard.writeText(window.location.href)
-      setCopyMessage('邀请链接已复制')
+      await navigator.clipboard.writeText(link)
+      if (copyAttempt.current === attempt) {
+        if (document.activeElement === inviteField.current) button.focus()
+        setCopyResult({})
+      }
     } catch {
-      setCopyMessage('请选择下方链接并复制')
-      setShowLink(true)
+      if (copyAttempt.current === attempt) {
+        // An asynchronous denial should not steal focus after another action or a panel close.
+        setCopyResult({ link, select: document.activeElement === button })
+      }
     }
   }
 
   async function copyDiagnostics() {
+    const attempt = ++diagAttempt.current
     try {
-      await navigator.clipboard.writeText(exportDiagnostics())
-      setDiagMessage('诊断信息已复制（已脱敏）')
+      const report: { room?: string } = JSON.parse(exportDiagnostics())
+      delete report.room
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2))
+      if (diagAttempt.current === attempt) setDiagMessage('诊断信息已复制（已脱敏）')
     } catch {
-      setDiagMessage('无法访问剪贴板，请稍后重试')
+      if (diagAttempt.current === attempt) setDiagMessage('剪贴板不可用，请稍后重试')
     }
+  }
+
+  function beginJoining(id: string) {
+    setJoinForm(false)
+    setLastAttempt('join')
+    nextFocus.current = 'exit'
+    void joinStudyRoom(id)
   }
 
   function joinFromInput(event: FormEvent) {
     event.preventDefault()
-    let id = joinValue.trim()
-    try { id = new URL(id).searchParams.get('room') ?? '' } catch { /* Also accept a room code. */ }
-    if (!parseRoomCode(id)) {
-      setJoinError('请输入完整的邀请链接或房间码。')
+    let rawCode = joinValue.trim()
+    try {
+      const url = new URL(rawCode)
+      rawCode = ['https:', 'http:'].includes(url.protocol) ? url.searchParams.get('room') ?? '' : ''
+    } catch { /* Also accept a room code. */ }
+    const id = parseRoomCode(rawCode)
+    if (!id) {
+      setJoinError(true)
+      joinField.current?.focus()
       return
     }
-    setJoinOpen(false)
-    setJoinValue('')
-    setJoinError('')
-    void joinStudyRoom(id)
+    beginJoining(id)
   }
 
   return (
     <section className="room-controls panel" aria-labelledby="room-heading">
-      <div className="section-head">
+      <div className="room-feedback">
         <h2 id="room-heading"><Users size={17} aria-hidden /> 房间</h2>
-        <span className="room-state" data-state={roomStatus} role="status"><i aria-hidden />{statusLabels[roomStatus]}</span>
+        <div role="status">
+          <span className="room-state" data-state={roomStatus}><i aria-hidden />{label}</span>
+          <p className="room-description">{detail}</p>
+        </div>
       </div>
-      <p className="room-description">
-        {roomMessage || (roomStatus === 'connected'
-          ? `房间里有 ${count + 1} 人`
-          : roomStatus === 'waiting' ? '当前没有其他在线成员，等好友加入后即可同步。'
-            : roomStatus === 'connecting' ? '正在尝试连接，书屋仍可使用。'
-              : '一个人待一会儿，或请好友进来。')}
-      </p>
       {roomStatus === 'connected' && <p className="field-message">连接方式 · {routes[diagnostics.route]}</p>}
+      <div className="room-actions">
+        {(showJoin || canCopy || roomStatus === 'failed') && <button className="button primary" ref={primaryButton}
+          onClick={canCopy ? (event) => void copyInvite(event.currentTarget)
+            : roomStatus === 'failed' && roomId ? () => beginJoining(roomId) : beginCreating}>
+          {roomStatus === 'failed' && roomId ? '重试连接' : <>
+            <Link2 size={17} aria-hidden /> {canCopy ? '复制邀请链接' : roomStatus === 'failed' && lastAttempt === 'create' ? '重试创建房间' : '创建房间'}
+          </>}
+        </button>}
+        {showJoin && <button className="button subtle" ref={joinButton} aria-expanded={joinOpen}
+          aria-controls={joinOpen ? 'room-join-form' : undefined} onClick={() => setJoinForm(!joinOpen)}>
+          <DoorOpen size={17} aria-hidden /> {roomStatus === 'failed' ? '输入邀请' : '加入房间'}
+        </button>}
+        {roomStatus !== 'solo' && <button className="button subtle" ref={exitButton} onClick={returnToSolo}>
+          <DoorOpen size={17} aria-hidden /> {pending ? '取消连接，返回单机' : '返回单机'}
+        </button>}
+      </div>
+      {joinOpen && showJoin && (
+        <form id="room-join-form" className="join-form" onSubmit={joinFromInput}>
+          <label htmlFor="invite-input">邀请链接或房间码</label>
+          <input id="invite-input" ref={joinField} value={joinValue} onChange={(event) => {
+            setJoinValue(event.target.value)
+            setJoinError(false)
+          }} autoComplete="off" spellCheck={false} aria-invalid={joinError || undefined}
+          aria-describedby={joinError ? 'invite-input-error' : undefined} />
+          <p id="invite-input-error" className="field-message" role="alert">{joinError ? '请输入完整的邀请链接或房间码。' : ''}</p>
+          <button className="button" type="submit">进入房间</button>
+          <button className="button subtle" type="button" onClick={() => setJoinForm(false)}>取消</button>
+        </form>
+      )}
+      {canCopy && <div className="invite-fallback">
+        <div role="status">{copyResult && <p className="field-message">{copyResult.link
+          ? '剪贴板不可用，请复制下方完整链接。' : '邀请链接已复制'}</p>}</div>
+        {copyResult?.link && <input ref={inviteField} aria-label="邀请链接" readOnly value={copyResult.link}
+          onFocus={(event) => event.currentTarget.select()} />}
+      </div>}
       {roomStatus !== 'solo' && <details className="network-diagnostics">
         <summary>网络诊断</summary>
         <dl>
@@ -177,36 +298,6 @@ function RoomControls() {
         <button className="button subtle" onClick={() => void copyDiagnostics()}>复制诊断</button>
         {diagMessage && <p className="field-message" role="status">{diagMessage}</p>}
       </details>}
-      {roomId ? (
-        <>
-          {roomStatus === 'failed'
-            ? <button className="button primary" onClick={() => void joinStudyRoom(roomId)}>重试连接</button>
-            : <button className="button primary" onClick={() => void copyInvite()}><Link2 size={17} aria-hidden /> 复制邀请链接</button>}
-          <button className="button subtle" onClick={leaveRoom}><DoorOpen size={17} aria-hidden /> 返回单机</button>
-        </>
-      ) : (
-        <>
-          <button className="button primary" onClick={createRoom} disabled={roomStatus === 'connecting'}><Link2 size={17} aria-hidden /> 创建房间</button>
-          <button className="button subtle" aria-expanded={joinOpen} onClick={() => setJoinOpen(!joinOpen)}>
-            <DoorOpen size={17} aria-hidden /> 加入房间
-          </button>
-          {roomStatus === 'failed' && <><button className="button" onClick={createRoom}>重试连接</button>
-            <button className="button subtle" onClick={leaveRoom}>返回单机</button></>}
-        </>
-      )}
-      {joinOpen && !roomId && (
-        <form className="join-form" onSubmit={joinFromInput}>
-          <label htmlFor="invite-input">邀请链接或房间码</label>
-          <input id="invite-input" ref={joinField} value={joinValue} onChange={(event) => {
-            setJoinValue(event.target.value)
-            setJoinError('')
-          }} autoComplete="off" />
-          {joinError && <p className="field-message" role="alert">{joinError}</p>}
-          <button className="button" type="submit">进入房间</button>
-        </form>
-      )}
-      {copyMessage && <p className="field-message" role="status">{copyMessage}</p>}
-      {showLink && <input ref={inviteField} aria-label="邀请链接" readOnly value={window.location.href} />}
       <RoomEnvironmentControls />
       <FocusMembers />
       <RoomChat />
