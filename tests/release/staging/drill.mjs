@@ -40,10 +40,15 @@ async function readBook(page) {
   const hud = scene(page).locator('#readPage')
   await check(hud).toHaveText(/第 .+ 页 \/ 共 6 页/)
   const before = (await hud.textContent()).trim()
-  await button(scene(page), '下一页').click()
+  // Reading progress persists across new tabs. At the last spread, turn backward.
+  const next = button(scene(page), '下一页')
+  const previous = button(scene(page), '上一页')
+  await check.poll(async () => await next.isEnabled() || await previous.isEnabled()).toBe(true)
+  const forward = await next.isEnabled()
+  await (forward ? next : previous).click()
   await check(hud).not.toHaveText(before)
   await check(hud).toHaveText(/第 .+ 页 \/ 共 6 页/)
-  return { before, after: (await hud.textContent()).trim() }
+  return { before, after: (await hud.textContent()).trim(), direction: forward ? 'next' : 'previous' }
 }
 
 const status = (page) => page.evaluate(() => new Promise((resolve, reject) => {
