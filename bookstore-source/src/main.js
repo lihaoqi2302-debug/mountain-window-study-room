@@ -1974,6 +1974,10 @@ function wireCanvas() {
 
 function setRoomTools(open) {
   $('#roomTools').classList.toggle('is-open', open);
+  if (open && APP.state.locomotion === 'walk') {
+    clearWalkInput();
+    clearReadingGesture();
+  }
   $('#roomMenu').setAttribute('aria-expanded', String(open));
 }
 
@@ -2069,7 +2073,7 @@ function wireUi() {
   });
   document.querySelectorAll('[data-walk]').forEach(button => {
     button.addEventListener('pointerdown', ev => {
-      if (APP.state.locomotion !== 'walk') return;
+      if (APP.state.locomotion !== 'walk' || tools.classList.contains('is-open')) return;
       ev.preventDefault();
       pressWalkInput(ev.pointerId,button.dataset.walk);
       button.setPointerCapture(ev.pointerId);
