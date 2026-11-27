@@ -1858,7 +1858,8 @@ async function warmRoomViews() {
     for (const [x,z] of [[1,0],[0,1],[-1,0],[0,-1]]) {
       eye.lookAt(x,1.56,z);
       renderer.render(scene,eye);
-      await new Promise(requestAnimationFrame);
+      // Offscreen warm-up must finish even when presentation frames pause.
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   } finally {
     renderer.setRenderTarget(previous);
