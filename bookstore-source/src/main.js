@@ -876,6 +876,10 @@ function onPointerMove(ev) {
 
 function onPointerDown(ev) {
   if (APP.state.locomotion === 'walk' && pointerDown.active && pointerDown.id !== ev.pointerId) return;
+  if (ev.pointerType === 'touch' && APP.state.mode === 'explore' && controls.enabled && orbitTouches.size > 1) {
+    pointerDown.active = false;
+    return;
+  }
   if(shelfInspection?.down(ev)){ev.preventDefault();try{ev.currentTarget.setPointerCapture(ev.pointerId);}catch{}return;}
   if (APP.state.mode==='explore' && APP.state.locomotion!=='orbit') {
     ev.preventDefault();
@@ -1912,7 +1916,6 @@ function wireCanvas() {
     if (ev.pointerType !== 'touch' || !controls.enabled || APP.state.mode !== 'explore') return;
     orbitTouches.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
     orbitPinchDistance = pinchDistance();
-    if (orbitPinchDistance) pointerDown.active = false;
   });
   el.addEventListener('pointermove', ev => {
     if (!orbitTouches.has(ev.pointerId)) return;

@@ -138,10 +138,14 @@ const GradeShader = {
       return fract((p3.x + p3.y) * p3.z);
     }
 
+    bool validHdr(vec3 rgb) {
+      return all(greaterThanEqual(rgb, vec3(0.0))) && all(lessThanEqual(rgb, vec3(65504.0)));
+    }
+
     void main() {
       vec2 uv = vUv;
       vec4 texel = texture2D(tDiffuse, uv);
-      vec3 color = max(texel.rgb, vec3(0.0));
+      vec3 color = texel.rgb;
 
       // Edge distances: 0 at the centre, 1 at the middle of each edge,
       // sqrt(2) in the corners.
@@ -155,8 +159,17 @@ const GradeShader = {
       // the page.
       vec2 caOffset =
         (uv - 0.5) * uChromatic * smoothstep(0.45, 1.05, edgeDist) / max(uResolution, vec2(1.0));
-      color.r = texture2D(tDiffuse, uv + caOffset).r;
-      color.b = texture2D(tDiffuse, uv - caOffset).b;
+      if (uChromatic > 0.0) {
+        color.r = texture2D(tDiffuse, uv + caOffset).r;
+        color.b = texture2D(tDiffuse, uv - caOffset).b;
+      }
+      // Repair an isolated bad scene pixel before the grade and tone mapping.
+      if (!validHdr(color)) {
+        vec2 pixel = vec2(1.0, 0.0) / max(uResolution, vec2(1.0));
+        vec3 adjacent = texture2D(tDiffuse, uv + pixel).rgb;
+        if (!validHdr(adjacent)) adjacent = texture2D(tDiffuse, uv - pixel).rgb;
+        color = validHdr(adjacent) ? adjacent : vec3(0.0);
+      }
 
       // A barely-there exposure lift (reading mode) and warm film grade.
       // Both happen in linear HDR space, before OutputPass tone maps.
@@ -287,6 +300,19 @@ export function createPostFX(renderer, scene, camera) {
   // A gradual bright-pass knee keeps a highlight from popping in or out
   // when a moving bulb or reflection crosses the extraction threshold.
   bloomPass.highPassUniforms.smoothWidth.value = 0.24;
+  // A single non-finite HDR sample can spread across the frame through
+  // the blur mip chain. Discard it before luminance and blur, keeping
+  // finite highlights and the normal exposure curve intact.
+  const brightFilter = bloomPass.materialHighPassFilter;
+  brightFilter.fragmentShader = brightFilter.fragmentShader.replace(
+    'float v = luminance( texel.xyz );',
+    `if ( !all( greaterThanEqual( texel.rgb, vec3( 0.0 ) ) )
+          || !all( lessThanEqual( texel.rgb, vec3( 65504.0 ) ) ) ) {
+        gl_FragColor = vec4( 0.0 );
+        return;
+      }
+      float v = luminance( texel.xyz );`,
+  );
 
   const gradePass = new ShaderPass(GradeShader);
   const outputPass = new OutputPass();
